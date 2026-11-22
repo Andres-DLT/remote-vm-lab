@@ -1,0 +1,35 @@
+{
+  "name": "Remote VM Lab (Mobile Ready)",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "forwardPorts": [5173],
+  "portsAttributes": {
+    "5173": {
+      "label": "Remote VM Lab Dashboard (Mobile Preview)",
+      "onAutoForward": "openPreview"
+    }
+  },
+  "postCreateCommand": "npm install",
+  "postAttachCommand": "npm run dev -- --host 0.0.0.0",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "GitHub.copilot",
+        "GitHub.copilot-chat",
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "files.autoSave": "afterDelay",
+        "files.autoSaveDelay": 1000,
+        "editor.wordWrap": "on",
+        "editor.minimap.enabled": false,
+        "editor.fontSize": 14,
+        "editor.tabSize": 2,
+        "workbench.startupEditor": "readme",
+        "terminal.integrated.fontSize": 13
+      }
+    }
+  }
+}
