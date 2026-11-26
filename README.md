@@ -1,6 +1,6 @@
-# Ave del Paraíso — Arte ASCII con `cv2.Sobel` (TikTok Studio + Python CLI) 🌺🐍
+# Ave del Paraíso — Arte ASCII con `cv2.Sobel` (Estudio Web + Python CLI) 🌺🐍
 
-Proyecto inspirado en el formato viral de TikTok que convierte la flor **Ave del Paraíso (*Strelitzia reginae*)** en arte ASCII direccional a todo color utilizando el operador derivativo **`cv2.Sobel`** de OpenCV, mostrando **la animación ASCII arriba y el código Python en vivo abajo**.
+Proyecto que convierte la flor **Ave del Paraíso (*Strelitzia reginae*)** en arte ASCII direccional a todo color utilizando el operador derivativo **`cv2.Sobel`** de OpenCV, mostrando **la animación ASCII arriba y el código Python en vivo abajo**.
 
 🌐 **Demo interactiva en GitHub Pages:** [**https://andres-dlt.github.io/remote-vm-lab/**](https://andres-dlt.github.io/remote-vm-lab/)
 
@@ -32,7 +32,7 @@ Ejecuta la experiencia completa directamente en tu terminal (incluye la animaci�
 ```bash
 pip install -r requirements.txt
 
-# Animación estilo TikTok en la terminal (flor arriba + código en vivo abajo)
+# Animación de escaneo paso a paso en la terminal (flor arriba + código en vivo abajo)
 python3 ave_del_paraiso_sobel.py
 
 # Render estático instantáneo con panel de código abajo
@@ -52,8 +52,8 @@ python3 ave_del_paraiso_sobel.py --static --save-txt strelitzia.txt --save-ans s
 La aplicación web reproduce en el navegador el motor matemático de `cv2.Sobel` (kernels 3×3, 5×5 y filtro Scharr) a 60 FPS:
 
 - **Panel Superior (Terminal ASCII)**:
-  - **Modo TikTok (`▶ Animar TikTok`)**: Escanea primero los vectores de borde `cv2.Sobel` (`/ | \ -`) y revela progresivamente el color ANSI de la flor mientras el código inferior escribe y ejecuta cada línea.
-  - **Brisa Viva 60 FPS (`🌬️ Brisa Viva`)**: Deformación orgánica sinusoidal recalculando `Gx` y `Gy` en cada cuadro.
+  - **Escaneo Paso a Paso (`▶ Escaneo Paso a Paso`)**: Escanea primero los vectores de borde `cv2.Sobel` (`/ | \ -`) y revela progresivamente el color ANSI de la flor mientras el código inferior escribe y ejecuta cada línea.
+  - **Brisa Viva 60 FPS (`🌬️ Brisa Viva 60fps`)**: Deformación orgánica sinusoidal recalculando `Gx` y `Gy` en cada cuadro.
   - **Inspector Matemático de Celdas**: Pasa el cursor o toca cualquier carácter de la flor para inspeccionar su coordenada, $G_x$, $G_y$, $|G|$, ángulo $\theta^\circ$ y secuencia ANSI `\033[38;2;R;G;Bm`.
 - **Panel Inferior (`ave_del_paraiso_sobel.py` en Vivo)**:
   - Cada deslizador (`WIDTH`, `EDGE_THRESH`, `ksize`, saturación, rampa ASCII) actualiza en tiempo real los valores literales dentro del código Python inferior.
@@ -76,5 +76,5 @@ Abre `http://localhost:5173`.
 - [`requirements.txt`](requirements.txt) — Dependencias de Python (`opencv-python`, `numpy`).
 - [`public/ave-del-paraiso.jpg`](public/ave-del-paraiso.jpg) — Fotografía botánica en alto contraste de *Strelitzia reginae* sobre fondo negro puro.
 - [`src/sobelEngine.js`](src/sobelEngine.js) — Motor de convolución Gaussiana + `cv2.Sobel` ($G_x, G_y, |G|, \theta$), dilatación cromática de bordes y generador procedural en Canvas.
-- [`src/main.js`](src/main.js) — Interfaz del estudio interactivo con código Python sincronizado abajo, inspector de celdas y modo 9:16 TikTok.
+- [`src/main.js`](src/main.js) — Interfaz del estudio interactivo con código Python sincronizado abajo, inspector de celdas y vista vertical 9:16.
 - [`src/style.css`](src/style.css) — Sistema de diseño oscuro botánico inspirado en los colores de *Strelitzia reginae*.

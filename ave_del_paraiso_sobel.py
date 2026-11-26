@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Ave del Paraíso (Strelitzia reginae) — Arte ASCII con cv2.Sobel (Estilo TikTok)
-===============================================================================
+Ave del Paraíso (Strelitzia reginae) — Arte ASCII Direccional con cv2.Sobel
+===========================================================================
 Renderiza la flor Ave del Paraíso en la terminal combinando:
   1. Detección de bordes direccionales con `cv2.Sobel` (Gx, Gy -> magnitud y ángulo)
      mapeados a caracteres vectoriales ('|', '/', '-', '\\').
   2. Relleno por luminancia con rampa de densidad ASCII (' .:-=+*#%@').
   3. Color ANSI TrueColor de 24 bits (\033[38;2;R;G;Bm) con realce botánico HSV.
-  4. Panel inferior de "Código en Vivo" sincronizado estilo TikTok.
+  4. Panel inferior de "Código en Vivo" sincronizado paso a paso.
 
 Uso rápido:
-  python3 ave_del_paraiso_sobel.py                  # Animación TikTok + código en vivo abajo
+  python3 ave_del_paraiso_sobel.py                  # Escaneo paso a paso + código en vivo abajo
   python3 ave_del_paraiso_sobel.py --static         # Render estático instantáneo + código abajo
   python3 ave_del_paraiso_sobel.py --mode edges     # Solo bordes direccionales cv2.Sobel
   python3 ave_del_paraiso_sobel.py --width 90       # Ajustar columnas ASCII
@@ -33,7 +33,7 @@ import numpy as np
 # Rampa de densidad luminosa (de oscuro a brillante)
 DENSITY_RAMP = " .:-=+*#%@"
 
-# Fragmento de código que se muestra y resalta en vivo en el panel inferior (estilo TikTok)
+# Fragmento de código que se muestra y resalta en vivo en el panel inferior
 LIVE_CODE_LINES = [
     ("import cv2, numpy as np", "setup"),
     ("img = cv2.imread('ave-del-paraiso.jpg')", "load"),
@@ -277,7 +277,7 @@ def compute_sobel_ascii_frame(
                 g = int(min(255, 190 * (norm_m ** 1.3)))
                 b = int(min(255, 95 + 160 * (1.0 - norm_m))) if norm_m > 0.08 else 0
             else:
-                # Modo "combined" (TikTok signature): bordes direccionales cv2.Sobel + relleno luminoso
+                # Modo "combined": bordes direccionales cv2.Sobel + relleno luminoso
                 if m >= edge_threshold:
                     ch = map_sobel_angle_to_char(float(angles[y, x]))
                     edge_count += 1
@@ -317,7 +317,7 @@ def format_live_code_panel(
     max_visible_lines: int = 7,
 ) -> List[str]:
     """
-    Construye el panel inferior de código Python en vivo (estilo TikTok)
+    Construye el panel inferior de código Python en vivo
     resaltando la línea activa del pipeline `cv2.Sobel`.
     """
     width = stats["cols"]
@@ -378,7 +378,7 @@ def apply_breeze_distortion(img_bgr: np.ndarray, phase: float) -> np.ndarray:
     return cv2.remap(img_bgr, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
 
 
-def run_tiktok_animation(
+def run_progressive_scan_animation(
     img_bgr: np.ndarray,
     width: int,
     edge_threshold: float,
@@ -390,7 +390,7 @@ def run_tiktok_animation(
     duration: float,
 ) -> None:
     """
-    Reproduce en la terminal la animación estilo TikTok:
+    Reproduce en la terminal la animación de escaneo paso a paso:
       Fase 1 (Reveal): Escaneo progresivo de bordes cv2.Sobel -> flor ASCII en color
                        mientras el código inferior escribe y ejecuta cada línea.
       Fase 2 (Brisa):  La flor Ave del Paraíso oscila suavemente con cv2.Sobel en tiempo real.
@@ -478,7 +478,7 @@ def run_tiktok_animation(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Arte ASCII de la flor Ave del Paraíso con cv2.Sobel y código en vivo abajo (TikTok)"
+        description="Arte ASCII direccional de la flor Ave del Paraíso con cv2.Sobel y código en vivo abajo"
     )
     parser.add_argument("--image", "-i", type=str, default=None, help="Ruta a una imagen personalizada")
     parser.add_argument("--width", "-w", type=int, default=0, help="Ancho en columnas ASCII (0 = auto según terminal)")
@@ -536,7 +536,7 @@ def main() -> None:
             sys.stdout.write("\n" + "\n".join(code_panel) + "\n")
         return
 
-    run_tiktok_animation(
+    run_progressive_scan_animation(
         img_bgr=img_bgr,
         width=width,
         edge_threshold=args.threshold,

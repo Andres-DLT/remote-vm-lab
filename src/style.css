@@ -181,7 +181,7 @@ body {
 }
 
 .btn-breeze.active,
-.btn-tiktok.active {
+.btn-vertical.active {
   background: var(--strelitzia-blue-soft);
   border-color: var(--strelitzia-blue);
   color: hsl(210, 95%, 76%);
@@ -200,20 +200,20 @@ body {
   align-items: start;
 }
 
-.studio-workspace.tiktok-framing {
+.studio-workspace.vertical-framing {
   grid-template-columns: minmax(0, 560px) 380px;
   justify-content: center;
 }
 
 @media (max-width: 1080px) {
   .studio-workspace,
-  .studio-workspace.tiktok-framing {
+  .studio-workspace.vertical-framing {
     grid-template-columns: 1fr;
   }
 }
 
 /* Split Stack: Top ASCII Terminal + Bottom Live Code Panel */
-.tiktok-split-stage {
+.sobel-split-stage {
   display: flex;
   flex-direction: column;
   background: var(--surface-1);
@@ -223,7 +223,7 @@ body {
   box-shadow: var(--shadow-elevated);
 }
 
-.studio-workspace.tiktok-framing .tiktok-split-stage {
+.studio-workspace.vertical-framing .sobel-split-stage {
   border-color: hsla(24, 95%, 56%, 0.35);
 }
 

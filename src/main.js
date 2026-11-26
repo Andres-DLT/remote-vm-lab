@@ -12,7 +12,7 @@ const state = {
   sourceType: 'photo', // 'photo' | 'procedural' | 'upload'
   viewMode: 'combined', // 'combined' | 'edges' | 'magnitude'
   renderTarget: 'canvas', // 'canvas' | 'pre'
-  tiktokFraming: false,
+  verticalFraming: false,
   pipExpanded: false,
 
   // cv2.Sobel & ASCII pipeline parameters
@@ -64,14 +64,14 @@ function buildShellHTML() {
         </div>
 
         <div class="header-actions">
-          <button type="button" class="btn btn-primary" id="btn-play-tiktok">
-            ▶ Animar TikTok (Scan + Código)
+          <button type="button" class="btn btn-primary" id="btn-play-scan">
+            ▶ Escaneo Paso a Paso
           </button>
           <button type="button" class="btn btn-breeze" id="btn-toggle-breeze">
             🌬️ Brisa Viva 60fps
           </button>
-          <button type="button" class="btn btn-tiktok" id="btn-toggle-framing">
-            📱 Marco 9:16 TikTok
+          <button type="button" class="btn btn-vertical" id="btn-toggle-framing">
+            📱 Vista Vertical 9:16
           </button>
           <button type="button" class="btn" id="btn-copy-ascii">
             📋 Copiar ASCII
@@ -88,8 +88,8 @@ function buildShellHTML() {
       </header>
 
       <main class="studio-workspace" id="studio-workspace">
-        <!-- LEFT / MAIN: TikTok Split Stage (Top ASCII Flower + Bottom Live Python Code) -->
-        <section class="tiktok-split-stage" aria-label="Terminal de Arte ASCII y Código en Vivo">
+        <!-- LEFT / MAIN: Split Stage (Top ASCII Flower + Bottom Live Python Code) -->
+        <section class="sobel-split-stage" aria-label="Terminal de Arte ASCII y Código en Vivo">
           <div class="stage-topbar">
             <div class="window-dots">
               <span class="win-dot crimson"></span>
@@ -517,7 +517,7 @@ function drawAsciiGridToCanvas() {
     }
   }
 
-  // Draw laser scanline during TikTok reveal
+  // Draw laser scanline during progressive scan reveal
   if (state.isRevealing && colorRowLimit < rows) {
     const scanY = padY + colorRowLimit * baseCharH;
     const grad = ctx.createLinearGradient(0, scanY - 4, logicalW, scanY + 4);
@@ -687,7 +687,7 @@ function startAnimationLoop() {
   animFrameId = requestAnimationFrame(tick);
 }
 
-function triggerTikTokReveal() {
+function triggerStepByStepScan() {
   state.isRevealing = true;
   state.revealProgress = 0.02;
   state.activeCodeLine = 0;
@@ -738,7 +738,7 @@ function loadPhotoPreset() {
     state.sourceCanvas = extractCroppedImageCanvas(img);
     renderPipPreview();
     recomputeAndRender();
-    triggerTikTokReveal();
+    triggerStepByStepScan();
   };
   img.onerror = () => {
     loadProceduralPreset();
@@ -753,7 +753,7 @@ function loadProceduralPreset() {
   state.sourceCanvas = extractCroppedImageCanvas(rawCanvas);
   renderPipPreview();
   recomputeAndRender();
-  triggerTikTokReveal();
+  triggerStepByStepScan();
 }
 
 function getFullStandalonePythonCode() {
@@ -764,7 +764,7 @@ function getFullStandalonePythonCode() {
   return `#!/usr/bin/env python3
 """
 Ave del Paraíso (Strelitzia reginae) — Arte ASCII con cv2.Sobel
-Configuración exportada en vivo desde TikTok Sobel ASCII Studio
+Configuración exportada en vivo desde Sobel ASCII Studio
 """
 import sys
 import cv2
@@ -826,8 +826,8 @@ if __name__ == "__main__":
 }
 
 function bindEvents() {
-  document.getElementById('btn-play-tiktok')?.addEventListener('click', () => {
-    triggerTikTokReveal();
+  document.getElementById('btn-play-scan')?.addEventListener('click', () => {
+    triggerStepByStepScan();
   });
 
   document.getElementById('btn-toggle-breeze')?.addEventListener('click', e => {
@@ -842,9 +842,9 @@ function bindEvents() {
   });
 
   document.getElementById('btn-toggle-framing')?.addEventListener('click', e => {
-    state.tiktokFraming = !state.tiktokFraming;
-    e.currentTarget.classList.toggle('active', state.tiktokFraming);
-    document.getElementById('studio-workspace')?.classList.toggle('tiktok-framing', state.tiktokFraming);
+    state.verticalFraming = !state.verticalFraming;
+    e.currentTarget.classList.toggle('active', state.verticalFraming);
+    document.getElementById('studio-workspace')?.classList.toggle('vertical-framing', state.verticalFraming);
   });
 
   document.querySelectorAll('[data-view-mode]').forEach(btn => {
@@ -886,7 +886,7 @@ function bindEvents() {
         state.sourceCanvas = extractCroppedImageCanvas(img);
         renderPipPreview();
         recomputeAndRender();
-        triggerTikTokReveal();
+        triggerStepByStepScan();
         flashCodeLines([1]);
         showToast('Imagen cargada y procesada con cv2.Sobel');
       };

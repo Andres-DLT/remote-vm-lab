@@ -2,7 +2,7 @@
   "name": "remote-vm-lab",
   "private": true,
   "version": "1.0.0",
-  "description": "Ave del Paraíso (Strelitzia reginae) — Arte ASCII direccional con cv2.Sobel en terminal Python y estudio web interactivo con código en vivo abajo (TikTok)",
+  "description": "Ave del Paraíso (Strelitzia reginae) — Arte ASCII direccional con cv2.Sobel en terminal Python y estudio web interactivo con código en vivo abajo",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",

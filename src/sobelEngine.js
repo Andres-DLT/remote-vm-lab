@@ -12,8 +12,8 @@ export const CHAR_RAMPS = {
     name: 'Sobel + Clásica ( .:-=+*#%@)',
     ramp: ' .:-=+*#%@'
   },
-  tiktok: {
-    name: 'TikTok Alto Contraste ( .:+#@)',
+  highContrast: {
+    name: 'Alto Contraste ( .:+#@)',
     ramp: ' .:+#@'
   },
   botanical: {
@@ -564,7 +564,7 @@ export function computeSobelAsciiGrid(sourceCanvas, options) {
         g = Math.min(255, Math.round(195 * Math.pow(normM, 1.25)));
         b = normM > 0.07 ? Math.min(255, Math.round(80 + 165 * (1 - normM))) : 0;
       } else {
-        // Modo combinado (TikTok cv2.Sobel + densidad por luminancia)
+        // Modo combinado (Bordes direccionales cv2.Sobel + densidad por luminancia)
         if (mag >= edgeThreshold) {
           ch = edgeChar;
           isEdge = true;
