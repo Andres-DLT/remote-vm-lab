@@ -24,7 +24,7 @@ for width in (64, 72):
 
 cases = []
 for kernel_key, ksize in (("3", 3), ("5", 5), ("scharr", -1)):
-    for mode in ("combined", "edges", "magnitude"):
+    for mode in ("combined", "edges", "vectors", "magnitude"):
         cases.append((72, 52, kernel_key, ksize, mode, "classic"))
 
 for ramp_key in ("classic", "highContrast", "botanical", "blocks"):
@@ -73,7 +73,7 @@ test('KERNEL_PRESETS["5"] define el kernel cv2.Sobel 5x5 real de OpenCV', () => 
 });
 
 for (const kernelKey of ['3', '5', 'scharr']) {
-  for (const viewMode of ['combined', 'edges', 'magnitude']) {
+  for (const viewMode of ['combined', 'edges', 'vectors', 'magnitude']) {
     test(`Paridad 100% JS vs Python OpenCV para kernel=${kernelKey} y modo=${viewMode}`, () => {
       const base = snapshots.rgba_72;
       const pySnap = snapshots[`72:52:${kernelKey}:${viewMode}:classic`];

@@ -54,15 +54,16 @@ python3 ave_del_paraiso_sobel.py --static --save-txt strelitzia.txt --save-ans s
 
 La aplicación web reproduce con paridad matemática exacta el pipeline de `cv2.Sobel` (kernels 3×3, 5×5 real de OpenCV y filtro Scharr) a 60 FPS:
 
-- **Panel Superior (Terminal ASCII)**:
-  - **Escaneo Paso a Paso (`▶ Escaneo Paso a Paso`)**: Escanea primero los vectores de borde `cv2.Sobel` (`/ | \ -`) y revela progresivamente el color ANSI de la flor mientras el código inferior escribe y ejecuta cada línea.
-  - **Brisa Viva 60 FPS (`🌬️ Brisa Viva 60fps`)**: Deformación orgánica sinusoidal recalculando `Gx` y `Gy` en cada cuadro con buffers reutilizados.
-  - **Exportación Vertical 9:16 (`🎥 Exportar WebM` / `🎞️ Exportar GIF`)**: Graba la animación completa (flor ASCII arriba + código Python en vivo abajo) en formato 9:16 lista para compartir.
-  - **Inspector Matemático de Celdas**: Pasa el cursor o toca cualquier carácter de la flor para inspeccionar su coordenada, $G_x$, $G_y$, $|G|$, ángulo $\theta^\circ$ y secuencia ANSI `\033[38;2;R;G;Bm`.
-- **Panel Inferior (`ave_del_paraiso_sobel.py` en Vivo)**:
+- **Panel Superior (Terminal ASCII Viva + Guía en 5 Pasos)**:
+  - **Historia Explicada en 5 Pasos (`🎬 Historia Explicada (5 Pasos)`)**: Guía visual pensada para que cualquier persona entienda al instante el algoritmo: **1. Foto Real HD** → **2. Escáner Horizontal $G_x$ (`|`)** → **3. Escáner Vertical $G_y$ (`-`)** → **4. Brújula de Ángulos (`| / - \`)** → **5. Floración Viva + Rayos X**.
+  - **Cortina Interactiva Rayos X (`🌗 Cortina Foto ↔ ASCII`)**: Desliza una cortina sobre los pétalos para comparar lado a lado la fotografía original HD, las flechas vectoriales $\nabla I$ (`→ ↗ ↑ ↖`) y el arte ASCII direccional.
+  - **Floración Cinética + Polen Bioluminiscente + Viento Interactivo**: Los sépalos naranjas y lenguas azules se abren dinámicamente, oscilan con el viento de tu cursor/dedo, emiten partículas de polen (`✦ * + ·`) y reaccionan al clic con **Ondas de Choque Vectoriales (`💥`)**.
+  - **Lupa Rayos X Magnificada (`🔬 Lupa Rayos X cv2.Sobel`)**: Muestra un zoom píxel a píxel de la foto real junto con la flecha de gradiente y el carácter ASCII elegido.
+  - **Exportación Vertical 9:16 (`🎥 Exportar WebM` / `🎞️ Exportar GIF`)**: Graba la historia completa en 5 pasos con cortina Foto↔ASCII, floración viva y código Python abajo en formato 9:16.
+- **Panel Inferior (`ave_del_paraiso_sobel.py` en Vivo + Traductor en Español Sencillo)**:
+  - **Traductor Línea por Línea (`💡`)**: Explica en lenguaje cotidiano y sin tecnicismos qué hace cada línea de código de Python y cómo afecta a la flor.
   - **Python Real en el Navegador (`🐍 Ejecutar Python Real (Pyodide)`)**: Carga bajo demanda `opencv-python` y `numpy` en WebAssembly mediante Pyodide y ejecuta el módulo [`ave_del_paraiso_sobel.py`](ave_del_paraiso_sobel.py) directamente en el navegador.
   - Cada deslizador (`WIDTH`, `EDGE_THRESH`, `ksize`, saturación, contraste, rampa ASCII) actualiza en tiempo real los valores literales dentro del código Python inferior y el comando CLI.
-  - Haz clic en cualquier línea del código para inspeccionar esa etapa del algoritmo (`Sobel Gx/Gy`, `magnitud`, `vectores`, `ANSI 24b`).
 - **Panel Remote VM Lab (`🖥️ VM Lab` en `#/vm-lab`)**: Conserva el dashboard móvil original del repositorio en la ruta `#/vm-lab`.
 
 ### Ejecutar y probar en local

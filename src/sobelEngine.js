@@ -101,6 +101,12 @@ export function mapAngleToEdgeGlyph(angleDeg) {
   return '\\';
 }
 
+export function mapGradientToArrowGlyph(gx, gy) {
+  const deg = (((Math.atan2(-gy, gx) * 180) / Math.PI) + 360) % 360;
+  const arrows = ['→', '↗', '↑', '↖', '←', '↙', '↓', '↘'];
+  return arrows[Math.round(deg / 45) % 8];
+}
+
 function boostRgbSaturationAndContrastInto(r, g, b, satBoost, contrastBoost, outArr, outOffset) {
   const rf = r / 255;
   const gf = g / 255;
@@ -172,10 +178,10 @@ function boostRgbSaturationAndContrastInto(r, g, b, satBoost, contrastBoost, out
 
 /**
  * Dibuja una flor Ave del Paraíso (Strelitzia reginae) procedural en un canvas
- * con curvas Bézier y nervaduras definidas para cuando se selecciona el preset vectorial
- * o con fase de animación de brisa.
+ * con apertura cinética de pétalos (bloomFactor 0..1), oscilación multi-armónica
+ * y pulsos de luz en las nervaduras para máxima riqueza de gradientes cv2.Sobel.
  */
-export function renderProceduralStrelitziaToCanvas(targetCanvas, breezePhase = 0) {
+export function renderProceduralStrelitziaToCanvas(targetCanvas, breezePhase = 0, bloomFactor = 1.0) {
   const w = 640;
   const h = 800;
   if (targetCanvas.width !== w) targetCanvas.width = w;
@@ -185,16 +191,17 @@ export function renderProceduralStrelitziaToCanvas(targetCanvas, breezePhase = 0
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, w, h);
 
-  const swayX = Math.sin(breezePhase) * 14;
-  const swayY = Math.cos(breezePhase * 0.8) * 6;
-  const cx = w * 0.43 + swayX * 0.35;
-  const cy = h * 0.51 + swayY * 0.35;
+  const bloom = Math.max(0.08, Math.min(1.08, bloomFactor));
+  const swayX = Math.sin(breezePhase) * 22 + Math.cos(breezePhase * 1.7) * 7;
+  const swayY = Math.cos(breezePhase * 0.85) * 10;
+  const cx = w * 0.43 + swayX * 0.38;
+  const cy = h * 0.51 + swayY * 0.38;
 
-  // 1. Tallo verde esmeralda con luz lateral
+  // 1. Tallo verde esmeralda con luz lateral y curvatura dinámica
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(w * 0.33, h - 10);
-  ctx.quadraticCurveTo(w * 0.32, h * 0.68, cx, cy + 20);
+  ctx.quadraticCurveTo(w * 0.32 + swayX * 0.15, h * 0.68, cx, cy + 20);
   ctx.lineWidth = 30;
   ctx.lineCap = 'round';
   ctx.strokeStyle = '#1f6e32';
@@ -202,13 +209,13 @@ export function renderProceduralStrelitziaToCanvas(targetCanvas, breezePhase = 0
 
   ctx.beginPath();
   ctx.moveTo(w * 0.323, h - 10);
-  ctx.quadraticCurveTo(w * 0.312, h * 0.68, cx - 4, cy + 20);
+  ctx.quadraticCurveTo(w * 0.312 + swayX * 0.15, h * 0.68, cx - 4, cy + 20);
   ctx.lineWidth = 10;
   ctx.strokeStyle = '#52c468';
   ctx.stroke();
   ctx.restore();
 
-  // 2. Abanico de sépalos fuego/naranja/dorado (cresta del Ave del Paraíso)
+  // 2. Abanico de sépalos fuego/naranja/dorado (cresta del Ave del Paraíso con apertura cinética)
   const sepals = [
     { angle: -156, len: 295, width: 34, c1: '#e6480f', c2: '#ff9e1b', c3: '#ffe066' },
     { angle: -139, len: 320, width: 38, c1: '#f05412', c2: '#ffad24', c3: '#ffeb82' },
@@ -217,16 +224,26 @@ export function renderProceduralStrelitziaToCanvas(targetCanvas, breezePhase = 0
     { angle: -72, len: 315, width: 36, c1: '#f25c13', c2: '#ffb024', c3: '#ffe680' }
   ];
 
+  const restBeakAngle = -20;
   sepals.forEach((sp, idx) => {
-    const localSway = Math.sin(breezePhase + idx * 0.45) * 3.2;
-    const rad = ((sp.angle + localSway) * Math.PI) / 180;
-    const tx = cx + Math.cos(rad) * sp.len;
-    const ty = cy + Math.sin(rad) * sp.len;
+    // Despliegue escalonado de cada sépalo desde la espata
+    const stagger = Math.max(0.12, Math.min(1.0, (bloom - idx * 0.09) / 0.64));
+    const easeBloom = 1 - Math.pow(1 - stagger, 3);
+    const localSway =
+      Math.sin(breezePhase * 1.25 + idx * 0.62) * 5.8 +
+      Math.cos(breezePhase * 2.1 - idx * 0.4) * 2.2;
+    const currentAngle = restBeakAngle + (sp.angle - restBeakAngle) * easeBloom + localSway;
+    const currentLen = sp.len * (0.28 + 0.72 * easeBloom);
+    const currentWidth = sp.width * (0.35 + 0.65 * easeBloom);
+
+    const rad = (currentAngle * Math.PI) / 180;
+    const tx = cx + Math.cos(rad) * currentLen;
+    const ty = cy + Math.sin(rad) * currentLen;
     const px = -Math.sin(rad);
     const py = Math.cos(rad);
 
-    const mx = cx + Math.cos(rad) * (sp.len * 0.46) + px * (sp.width * 0.32);
-    const my = cy + Math.sin(rad) * (sp.len * 0.46) + py * (sp.width * 0.32);
+    const mx = cx + Math.cos(rad) * (currentLen * 0.46) + px * (currentWidth * 0.32);
+    const my = cy + Math.sin(rad) * (currentLen * 0.46) + py * (currentWidth * 0.32);
 
     const grad = ctx.createLinearGradient(cx, cy, tx, ty);
     grad.addColorStop(0, sp.c1);
@@ -235,23 +252,36 @@ export function renderProceduralStrelitziaToCanvas(targetCanvas, breezePhase = 0
 
     ctx.beginPath();
     ctx.moveTo(cx, cy);
-    ctx.quadraticCurveTo(mx + px * sp.width, my + py * sp.width, tx, ty);
-    ctx.quadraticCurveTo(mx - px * sp.width * 0.65, my - py * sp.width * 0.65, cx, cy);
+    ctx.quadraticCurveTo(mx + px * currentWidth, my + py * currentWidth, tx, ty);
+    ctx.quadraticCurveTo(mx - px * currentWidth * 0.65, my - py * currentWidth * 0.65, cx, cy);
     ctx.closePath();
     ctx.fillStyle = grad;
     ctx.fill();
 
     // Borde y nervadura central definida para activar cv2.Sobel
-    ctx.lineWidth = 2.2;
+    ctx.lineWidth = 2.4;
     ctx.strokeStyle = sp.c3;
     ctx.stroke();
 
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.quadraticCurveTo(mx + px * 4, my + py * 4, tx, ty);
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 3.2;
     ctx.strokeStyle = '#fff5bd';
     ctx.stroke();
+
+    // Costillas secundarias en el pétalo para enriquecer los ángulos de cv2.Sobel
+    for (const frac of [0.38, 0.68]) {
+      const rx0 = cx + Math.cos(rad) * (currentLen * frac);
+      const ry0 = cy + Math.sin(rad) * (currentLen * frac);
+      const ribSpan = currentWidth * (1 - frac * 0.55) * 0.65;
+      ctx.beginPath();
+      ctx.moveTo(rx0 - px * ribSpan * 0.45, ry0 - py * ribSpan * 0.45);
+      ctx.lineTo(rx0 + px * ribSpan + Math.cos(rad) * 16, ry0 + py * ribSpan + Math.sin(rad) * 16);
+      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = 'rgba(255, 248, 198, 0.8)';
+      ctx.stroke();
+    }
   });
 
   // 3. Pétalos lengua en flecha azul cobalto eléctrico
@@ -261,17 +291,23 @@ export function renderProceduralStrelitziaToCanvas(targetCanvas, breezePhase = 0
   ];
 
   tongues.forEach((tg, idx) => {
-    const localSway = Math.cos(breezePhase + idx * 0.7) * 2.6;
-    const rad = ((tg.angle + localSway) * Math.PI) / 180;
-    const tx = cx + 14 + Math.cos(rad) * tg.len;
-    const ty = cy - 4 + Math.sin(rad) * tg.len;
+    const stagger = Math.max(0.15, Math.min(1.0, (bloom - 0.15 - idx * 0.12) / 0.65));
+    const easeBloom = 1 - Math.pow(1 - stagger, 3);
+    const localSway = Math.cos(breezePhase * 1.4 + idx * 0.85) * 4.5;
+    const currentAngle = -14 + (tg.angle + 14) * easeBloom + localSway;
+    const currentLen = tg.len * (0.25 + 0.75 * easeBloom);
+    const currentBarb = tg.barb * (0.35 + 0.65 * easeBloom);
+
+    const rad = (currentAngle * Math.PI) / 180;
+    const tx = cx + 14 + Math.cos(rad) * currentLen;
+    const ty = cy - 4 + Math.sin(rad) * currentLen;
     const px = -Math.sin(rad);
     const py = Math.cos(rad);
 
-    const bx = cx + 14 + Math.cos(rad) * (tg.len * 0.54) + px * tg.barb;
-    const by = cy - 4 + Math.sin(rad) * (tg.len * 0.54) + py * tg.barb;
-    const ix = cx + 14 + Math.cos(rad) * (tg.len * 0.48) - px * (tg.barb * 0.45);
-    const iy = cy - 4 + Math.sin(rad) * (tg.len * 0.48) - py * (tg.barb * 0.45);
+    const bx = cx + 14 + Math.cos(rad) * (currentLen * 0.54) + px * currentBarb;
+    const by = cy - 4 + Math.sin(rad) * (currentLen * 0.54) + py * currentBarb;
+    const ix = cx + 14 + Math.cos(rad) * (currentLen * 0.48) - px * (currentBarb * 0.45);
+    const iy = cy - 4 + Math.sin(rad) * (currentLen * 0.48) - py * (currentBarb * 0.45);
 
     const bGrad = ctx.createLinearGradient(cx, cy, tx, ty);
     bGrad.addColorStop(0, '#1742b5');
@@ -285,14 +321,14 @@ export function renderProceduralStrelitziaToCanvas(targetCanvas, breezePhase = 0
     ctx.closePath();
     ctx.fillStyle = bGrad;
     ctx.fill();
-    ctx.lineWidth = 2.2;
+    ctx.lineWidth = 2.4;
     ctx.strokeStyle = '#99c9ff';
     ctx.stroke();
   });
 
   // 4. Espata horizontal (pico verde esmeralda con labio carmesí)
-  const beakTipX = w * 0.93 + swayX * 0.4;
-  const beakTipY = h * 0.48 + swayY * 0.5;
+  const beakTipX = w * 0.93 + swayX * 0.45;
+  const beakTipY = h * 0.48 + swayY * 0.65;
 
   const beakGrad = ctx.createLinearGradient(cx - 25, cy, beakTipX, beakTipY + 45);
   beakGrad.addColorStop(0, '#a3243b');
@@ -308,7 +344,7 @@ export function renderProceduralStrelitziaToCanvas(targetCanvas, breezePhase = 0
   ctx.closePath();
   ctx.fillStyle = beakGrad;
   ctx.fill();
-  ctx.lineWidth = 2.2;
+  ctx.lineWidth = 2.4;
   ctx.strokeStyle = '#75d468';
   ctx.stroke();
 
@@ -381,7 +417,7 @@ export function extractCroppedImageCanvas(sourceEl, targetCroppedCanvas = null) 
   return cropped;
 }
 
-// Buffers reutilizables para evitar asignaciones de memoria y GC en Brisa Viva 60fps
+// Buffers reutilizables para evitar asignaciones de memoria y GC en animación continua a 60fps
 const scratchBuffers = {
   size: 0,
   gray: null,
@@ -543,6 +579,7 @@ export function computeSobelAsciiGridFromRgba(rgba, cols, rows, options = {}, re
         rowCells[x] = {
           char: ' ',
           edgeChar: ' ',
+          arrowChar: ' ',
           r: 0,
           g: 0,
           b: 0,
@@ -564,6 +601,7 @@ export function computeSobelAsciiGridFromRgba(rgba, cols, rows, options = {}, re
       const er = edgeRgb[idx3];
       const eg = edgeRgb[idx3 + 1];
       const eb = edgeRgb[idx3 + 2];
+      const arrowChar = mapGradientToArrowGlyph(gx, gy);
 
       let ch = ' ';
       let isEdge = false;
@@ -578,6 +616,20 @@ export function computeSobelAsciiGridFromRgba(rgba, cols, rows, options = {}, re
           b = Math.min(255, Math.trunc(eb * 1.12 + 14));
         } else {
           ch = ' ';
+        }
+      } else if (viewMode === 'vectors') {
+        if (mag >= edgeThreshold * 0.68) {
+          ch = arrowChar;
+          isEdge = true;
+          edgeCount++;
+          r = Math.min(255, Math.trunc(er * 1.15 + 18));
+          g = Math.min(255, Math.trunc(eg * 1.15 + 18));
+          b = Math.min(255, Math.trunc(eb * 1.15 + 18));
+        } else {
+          ch = '·';
+          r = Math.trunc(r * 0.42);
+          g = Math.trunc(g * 0.42);
+          b = Math.trunc(b * 0.42);
         }
       } else if (viewMode === 'magnitude') {
         const rIdx = Math.min(rampLen - 1, Math.trunc((mag / 255.0) * (rampLen - 1)));
@@ -606,6 +658,7 @@ export function computeSobelAsciiGridFromRgba(rgba, cols, rows, options = {}, re
       rowCells[x] = {
         char: ch,
         edgeChar: mag >= edgeThreshold * 0.65 ? edgeChar : ' ',
+        arrowChar: mag >= edgeThreshold * 0.65 ? arrowChar : ' ',
         r,
         g,
         b,
@@ -639,9 +692,13 @@ let sharedSampleCanvas = null;
 let sharedSampleCtx = null;
 let cachedPreprocKey = '';
 
+export function getSampledReferenceCanvas() {
+  return sharedSampleCanvas;
+}
+
 /**
- * Ejecuta el pipeline cv2.Sobel sobre el canvas fuente reutilizando el canvas de muestreo
- * y cacheando el preprocesado de color/desenfoque cuando la imagen de entrada no cambia.
+ * Ejecuta el pipeline cv2.Sobel sobre el canvas fuente con deformación cinética multi-onda,
+ * apertura de floración (bloomFactor) y respuesta física al viento del cursor.
  */
 export function computeSobelAsciiGrid(sourceCanvas, options = {}) {
   const {
@@ -649,6 +706,8 @@ export function computeSobelAsciiGrid(sourceCanvas, options = {}) {
     saturationBoost = 1.35,
     contrastBoost = 1.15,
     breezePhase = null,
+    bloomFactor = 1.0,
+    pointerWind = null,
     charAspect = 0.5,
     sourceVersion = 0
   } = options;
@@ -664,10 +723,10 @@ export function computeSobelAsciiGrid(sourceCanvas, options = {}) {
   if (sharedSampleCanvas.width !== cols) sharedSampleCanvas.width = cols;
   if (sharedSampleCanvas.height !== rows) sharedSampleCanvas.height = rows;
 
-  const preprocKey =
-    breezePhase === null
-      ? `${sourceVersion}:${srcW}x${srcH}:${cols}x${rows}:${saturationBoost}:${contrastBoost}`
-      : '';
+  const isStatic = breezePhase === null && Math.abs(bloomFactor - 1.0) < 0.001 && !pointerWind;
+  const preprocKey = isStatic
+    ? `${sourceVersion}:${srcW}x${srcH}:${cols}x${rows}:${saturationBoost}:${contrastBoost}`
+    : '';
   const reusePreproc = preprocKey !== '' && preprocKey === cachedPreprocKey;
 
   let rgba = null;
@@ -675,15 +734,39 @@ export function computeSobelAsciiGrid(sourceCanvas, options = {}) {
     sharedSampleCtx.fillStyle = '#000000';
     sharedSampleCtx.fillRect(0, 0, cols, rows);
 
-    if (breezePhase !== null) {
-      // Aplicar deformación sinusoidal por franjas horizontales para simular brisa viva
+    if (!isStatic) {
+      const phase = breezePhase || 0;
       const slices = rows;
+      const bloom = Math.max(0.25, Math.min(1.12, bloomFactor));
+
       for (let y = 0; y < slices; y++) {
-        const vFactor = Math.pow(1 - y / slices, 1.35);
-        const dx = Math.sin(y / 6.5 + breezePhase) * (cols * 0.016) * vFactor;
-        const sy = (y / slices) * srcH;
-        const sh = srcH / slices;
-        sharedSampleCtx.drawImage(sourceCanvas, 0, sy, srcW, sh, dx, y, cols, 1.15);
+        const normY = y / slices; // 0 arriba (puntas de la cresta), 1 abajo (tallo)
+        const crestWeight = Math.pow(1 - normY, 1.3);
+
+        // Movimiento orgánico multi-armónico: oscilación principal + aleteo de pétalos superiores
+        const primarySway = Math.sin(phase * 1.15 + normY * 3.2) * (cols * 0.042) * crestWeight;
+        const flutter = Math.cos(phase * 2.4 - y * 0.28) * (cols * 0.015) * Math.pow(1 - normY, 1.8);
+        let dx = primarySway + flutter;
+
+        // Efecto de respiración y apertura de la corona (bloomFactor)
+        const crownSpanScale = 1.0 - (1.0 - bloom) * 0.58 * crestWeight;
+        const sliceW = cols * crownSpanScale;
+        const bloomOffsetX = (cols - sliceW) * 0.46;
+
+        // Interacción física con el cursor / dedo sobre los pétalos
+        if (pointerWind && pointerWind.active) {
+          const distY = Math.abs(normY - pointerWind.normY);
+          if (distY < 0.35) {
+            const influence = Math.pow(1 - distY / 0.35, 2);
+            dx += pointerWind.forceX * cols * 0.075 * influence;
+          }
+        }
+
+        const sy = Math.max(0, Math.min(srcH - 1, normY * srcH));
+        const sh = Math.max(1, srcH / slices);
+        const dy = Math.sin(phase * 0.9 + normY * 2.5) * 1.35 * crestWeight + (1.0 - bloom) * rows * 0.14 * crestWeight;
+
+        sharedSampleCtx.drawImage(sourceCanvas, 0, sy, srcW, sh, bloomOffsetX + dx, y + dy, sliceW, 1.25);
       }
     } else {
       sharedSampleCtx.drawImage(sourceCanvas, 0, 0, cols, rows);

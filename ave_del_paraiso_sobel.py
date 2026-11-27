@@ -306,6 +306,16 @@ def sobel_ascii_arrays_from_resized(
         is_edge = active & (mag >= edge_threshold * EDGE_ONLY_FACTOR)
         chars = np.where(is_edge, glyphs, " ")
         out_rgb = np.where(is_edge[..., None], edge_boost, out_rgb)
+    elif mode == "vectors":
+        is_edge = active & (mag >= edge_threshold * 0.68)
+        deg360 = (np.degrees(np.arctan2(-gy, gx)) + 360.0) % 360.0
+        arrows_arr = np.array(["→", "↗", "↑", "↖", "←", "↙", "↓", "↘"])
+        arrow_idx = np.rint(deg360 / 45.0).astype(np.int32) % 8
+        arrow_glyphs = arrows_arr[arrow_idx]
+        chars = np.where(is_edge, arrow_glyphs, "·")
+        vector_boost = np.minimum(255, (edge_rgb.astype(np.float64) * 1.15 + 18).astype(np.int32))
+        dim_rgb = (out_rgb * 0.42).astype(np.int32)
+        out_rgb = np.where(is_edge[..., None], vector_boost, dim_rgb)
     elif mode == "magnitude":
         idx = np.minimum(ramp_len - 1, (mag / 255.0 * (ramp_len - 1)).astype(np.int32))
         chars = ramp_arr[idx]
@@ -434,10 +444,11 @@ def format_live_code_panel(
     stats: dict,
     char_progress: float = 1.0,
     max_visible_lines: int = 7,
+    story_caption: str | None = None,
 ) -> List[str]:
     """
     Construye el panel inferior de código Python en vivo
-    resaltando la línea activa del pipeline `cv2.Sobel`.
+    resaltando la línea activa del pipeline `cv2.Sobel` y mostrando una guía explicativa.
     """
     width = stats["cols"]
     divider = (
@@ -456,7 +467,10 @@ def format_live_code_panel(
     start = max(0, min(active_line_idx - half, total - max_visible_lines))
     end = min(total, start + max_visible_lines)
 
-    out = [divider]
+    out = []
+    if story_caption:
+        out.append(f" \033[48;2;28;25;23m\033[1;38;2;253;224;71m 💡 {story_caption} \033[0m")
+    out.append(divider)
     for idx in range(start, end):
         code_text, _stage = LIVE_CODE_LINES[idx]
         # Sustituir parámetros dinámicos en vivo
@@ -484,17 +498,57 @@ def format_live_code_panel(
     return out
 
 
-def apply_breeze_distortion(img_bgr: np.ndarray, phase: float) -> np.ndarray:
-    """Aplica una suave brisa orgánica sinusoidal a los pétalos del Ave del Paraíso."""
+def apply_breeze_distortion(img_bgr: np.ndarray, phase: float, bloom_factor: float = 1.0) -> np.ndarray:
+    """
+    Aplica movimiento orgánico multi-armónico + apertura cinética de corona (bloom_factor)
+    a los pétalos del Ave del Paraíso.
+    """
     h, w = img_bgr.shape[:2]
     y_coords, x_coords = np.indices((h, w), dtype=np.float32)
-    # Mayor movimiento en la parte superior de los pétalos y menor en la base del tallo
-    vertical_factor = np.clip(1.0 - (y_coords / float(h)), 0.0, 1.0) ** 1.4
-    dx = np.sin(y_coords / 28.0 + phase) * 4.5 * vertical_factor
-    dy = np.cos(x_coords / 36.0 + phase * 0.8) * 1.8 * vertical_factor
-    map_x = np.clip(x_coords + dx, 0, w - 1)
-    map_y = np.clip(y_coords + dy, 0, h - 1)
+    norm_y = y_coords / float(max(1, h))
+    crest_weight = np.clip(1.0 - norm_y, 0.0, 1.0) ** 1.35
+
+    # Oscilación principal + aleteo independiente de las puntas de la cresta
+    dx = (
+        np.sin(phase * 1.2 + norm_y * 3.4) * (w * 0.038) * crest_weight
+        + np.cos(phase * 2.3 - y_coords / 18.0) * (w * 0.014) * (crest_weight ** 1.4)
+    )
+    dy = np.cos(x_coords / 34.0 + phase * 0.95) * (h * 0.014) * crest_weight
+
+    # Escalado horizontal desde el eje de la espata para simular floración / apertura
+    center_x = w * 0.45
+    bloom = max(0.35, min(1.12, bloom_factor))
+    span_scale = 1.0 - (1.0 - bloom) * 0.55 * crest_weight
+    src_x = center_x + (x_coords - center_x - dx) / np.maximum(0.25, span_scale)
+    src_y = y_coords - dy - (1.0 - bloom) * (h * 0.10) * crest_weight
+
+    map_x = np.clip(src_x, 0, w - 1).astype(np.float32)
+    map_y = np.clip(src_y, 0, h - 1).astype(np.float32)
     return cv2.remap(img_bgr, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+
+
+def inject_pollen_sparks_into_arrays(chars: np.ndarray, rgb: np.ndarray, phase: float) -> Tuple[np.ndarray, np.ndarray]:
+    """Añade partículas bioluminiscentes de polen ('✦', '*', '+', '·') flotando desde la cresta."""
+    rows, cols = chars.shape
+    chars_out = chars.copy()
+    rgb_out = rgb.copy()
+    spark_glyphs = ["✦", "*", "+", "·"]
+    spark_colors = [
+        (255, 226, 102),  # Dorado polen
+        (255, 136, 34),   # Naranja sépalo
+        (96, 175, 255),   # Azul cobalto
+        (110, 231, 135),  # Esmeralda
+    ]
+    num_sparks = max(8, cols // 6)
+    for i in range(num_sparks):
+        seed = i * 1.731
+        norm_age = (phase * 0.22 + seed) % 1.0
+        sy = int(rows * (0.58 - norm_age * 0.54))
+        sx = int(cols * (0.24 + 0.56 * ((math.sin(seed * 3.1) + 1) * 0.5)) + math.sin(phase * 1.4 + seed) * 5)
+        if 0 <= sy < rows and 0 <= sx < cols and chars_out[sy, sx] == " ":
+            chars_out[sy, sx] = spark_glyphs[(i + int(phase * 3)) % len(spark_glyphs)]
+            rgb_out[sy, sx] = spark_colors[i % len(spark_colors)]
+    return chars_out, rgb_out
 
 
 def run_progressive_scan_animation(
@@ -511,10 +565,9 @@ def run_progressive_scan_animation(
     duration: float,
 ) -> None:
     """
-    Reproduce en la terminal la animación de escaneo paso a paso:
-      Fase 1 (Reveal): Escaneo progresivo de bordes cv2.Sobel -> flor ASCII en color
-                       mientras el código inferior escribe y ejecuta cada línea.
-      Fase 2 (Brisa):  La flor Ave del Paraíso oscila suavemente con cv2.Sobel en tiempo real.
+    Reproduce en la terminal la narrativa visual en 5 actos:
+      Acto 1-3: Escaneo progresivo explicando Gx (|), Gy (-), vectores (→ ↗ ↑) y trazos tangentes (/ | \\ -)
+      Acto 4-5: Floración cinética + brisa multi-armónica + polen bioluminiscente en tiempo real.
     """
     ansi_lines, _plain, stats = compute_sobel_ascii_frame(
         img_bgr,
@@ -529,20 +582,29 @@ def run_progressive_scan_animation(
     edges_only_ansi, _, _ = compute_sobel_ascii_frame(
         img_bgr,
         width=width,
-        edge_threshold=edge_threshold * 0.85,
+        edge_threshold=edge_threshold * 0.82,
         ksize=ksize,
         saturation_boost=saturation,
         contrast_boost=contrast,
         mode="edges",
         ramp=ramp,
     )
+    vectors_only_ansi, _, _ = compute_sobel_ascii_frame(
+        img_bgr,
+        width=width,
+        edge_threshold=edge_threshold * 0.80,
+        ksize=ksize,
+        saturation_boost=saturation,
+        contrast_boost=contrast,
+        mode="vectors",
+        ramp=ramp,
+    )
 
     total_rows = len(ansi_lines)
-    total_frames = max(20, int(fps * duration))
-    reveal_frames = max(12, int(total_frames * 0.58))
+    total_frames = max(24, int(fps * duration))
+    reveal_frames = max(14, int(total_frames * 0.45))
     frame_delay = 1.0 / max(1, fps)
 
-    # Ocultar cursor y limpiar pantalla
     sys.stdout.write("\033[?25l\033[2J\033[H")
     sys.stdout.flush()
 
@@ -553,25 +615,35 @@ def run_progressive_scan_animation(
                 progress = (frame_idx + 1) / float(reveal_frames)
                 color_row_limit = int(progress * total_rows)
                 edge_row_limit = min(total_rows, color_row_limit + max(4, total_rows // 7))
+                vec_row_limit = min(total_rows, edge_row_limit + max(4, total_rows // 8))
 
                 frame_buffer: List[str] = []
                 for r_idx in range(total_rows):
                     if r_idx < color_row_limit:
                         frame_buffer.append(ansi_lines[r_idx])
                     elif r_idx < edge_row_limit:
-                        # Banda de escaneo con bordes puros cv2.Sobel (/ | \ -)
                         frame_buffer.append(edges_only_ansi[r_idx])
+                    elif r_idx < vec_row_limit:
+                        frame_buffer.append(vectors_only_ansi[r_idx])
                     else:
                         frame_buffer.append("")
+
+                if progress < 0.34:
+                    caption = "PASO 1/4: cv2.Sobel detecta cambios de luz Gx/Gy y calcula flechas de dirección (→ ↗ ↑ ↖)"
+                elif progress < 0.68:
+                    caption = "PASO 2/4: Cada ángulo θ° se convierte en el trazo ASCII que dibuja el pétalo (| / - \\)"
+                else:
+                    caption = "PASO 3/4: Relleno de textura por luminancia + color botánico ANSI de 24 bits"
 
                 code_float = progress * (len(LIVE_CODE_LINES) - 1)
                 active_code_idx = int(code_float)
                 char_prog = min(1.0, (code_float - active_code_idx) * 1.4 + 0.25)
             else:
-                # Fase 2: Brisa orgánica en tiempo real recalculando cv2.Sobel
-                breeze_phase = (frame_idx - reveal_frames) * 0.28
-                swayed = apply_breeze_distortion(img_bgr, breeze_phase)
-                frame_buffer, _, stats = compute_sobel_ascii_frame(
+                live_idx = frame_idx - reveal_frames
+                breeze_phase = live_idx * 0.24
+                bloom_prog = min(1.0, 0.55 + (live_idx / max(1.0, (total_frames - reveal_frames) * 0.45)) * 0.45)
+                swayed = apply_breeze_distortion(img_bgr, breeze_phase, bloom_factor=bloom_prog)
+                arrays = compute_sobel_ascii_arrays(
                     swayed,
                     width=width,
                     edge_threshold=edge_threshold,
@@ -581,11 +653,21 @@ def run_progressive_scan_animation(
                     mode=mode,
                     ramp=ramp,
                 )
+                spark_chars, spark_rgb = inject_pollen_sparks_into_arrays(arrays["chars"], arrays["rgb"], breeze_phase)
+                frame_buffer, _ = arrays_to_lines(spark_chars, spark_rgb)
+                stats = arrays["stats"]
+                caption = "PASO 4/4: ¡Flor Ave del Paraíso VIVA! Oscilación armónica + polen bioluminiscente (✦ * + ·)"
                 active_code_idx = len(LIVE_CODE_LINES) - 1
                 char_prog = 1.0
 
             if show_code:
-                code_panel = format_live_code_panel(active_code_idx, stats, char_prog, max_visible_lines=7)
+                code_panel = format_live_code_panel(
+                    active_code_idx,
+                    stats,
+                    char_prog,
+                    max_visible_lines=7,
+                    story_caption=caption,
+                )
                 full_output = "\n".join(frame_buffer + [""] + code_panel)
             else:
                 full_output = "\n".join(frame_buffer)
@@ -629,9 +711,9 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         "-m",
-        choices=["combined", "edges", "magnitude"],
+        choices=["combined", "edges", "vectors", "magnitude"],
         default="combined",
-        help="Modo visual: combined (Sobel + densidad), edges (solo / | \\ -), magnitude (mapa gradiente)",
+        help="Modo visual: combined (Sobel + densidad), edges (/ | \\ -), vectors (flechas ∇I), magnitude (|G|)",
     )
     parser.add_argument("--static", action="store_true", help="Imprime un único frame estático y termina")
     parser.add_argument("--no-code", action="store_true", help="Oculta el panel inferior de código en vivo")

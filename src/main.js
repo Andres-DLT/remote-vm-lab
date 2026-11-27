@@ -5,15 +5,64 @@ import {
   KERNEL_PRESETS,
   computeSobelAsciiGrid,
   extractCroppedImageCanvas,
+  getSampledReferenceCanvas,
   gridToAnsiText,
   gridToPlainText,
   renderProceduralStrelitziaToCanvas
 } from './sobelEngine.js';
 import { renderVmDashboard } from './vmDashboard.js';
 
+const STORY_ACTS = [
+  {
+    act: 1,
+    shortLabel: '1. 📸 Foto Real',
+    badge: 'PASO 1 DE 5 • LA FLOR REAL',
+    title: 'Empezamos con la fotografía real del Ave del Paraíso (Strelitzia reginae)',
+    subtitle:
+      'Mira cómo la cortina escanea la foto original: cada pétalo naranja, lengua azul y pico verde se mide píxel a píxel.',
+    codeLine: 1
+  },
+  {
+    act: 2,
+    shortLabel: '2. 🟠 Escáner Gx (|)',
+    badge: 'PASO 2 DE 5 • DERIVADA HORIZONTAL Gx',
+    title: 'cv2.Sobel(dx=1, dy=0) detecta cambios de luz de izquierda a derecha → traza "|"',
+    subtitle:
+      'Donde la luz salta horizontalmente (como en el tallo y los pétalos verticales), Sobel dibuja barras verticales "|".',
+    codeLine: 5
+  },
+  {
+    act: 3,
+    shortLabel: '3. 🔵 Escáner Gy (-)',
+    badge: 'PASO 3 DE 5 • DERIVADA VERTICAL Gy',
+    title: 'cv2.Sobel(dx=0, dy=1) detecta cambios de luz de arriba a abajo → traza "-"',
+    subtitle:
+      'Donde la luz salta verticalmente (como en el pico horizontal del ave), Sobel dibuja guiones horizontales "-".',
+    codeLine: 6
+  },
+  {
+    act: 4,
+    shortLabel: '4. 🧭 Brújula (/ | \\ -)',
+    badge: 'PASO 4 DE 5 • BRÚJULA DE ÁNGULOS arctan2(Gy, Gx)',
+    title: 'Combinamos Gx y Gy para obtener el ángulo exacto θ° de cada pétalo (→ ↗ ↑ ↖)',
+    subtitle:
+      'En vez de usar letras al azar, el ángulo del borde elige el carácter que sigue la curva del pétalo: |  /  -  \\.',
+    codeLine: 9
+  },
+  {
+    act: 5,
+    shortLabel: '5. 🌺 Floración Viva',
+    badge: 'PASO 5 DE 5 • ARTE ASCII VIVO + CORTINA RAYOS X',
+    title: 'Relleno de luz + color botánico 24-bit + floración cinética y polen vivo',
+    subtitle:
+      'Toca o mueve el cursor sobre la flor para empujar los pétalos con viento, lanzar ondas de choque o deslizar la cortina.',
+    codeLine: 11
+  }
+];
+
 const state = {
   sourceType: 'photo', // 'photo' | 'procedural' | 'upload'
-  viewMode: 'combined', // 'combined' | 'edges' | 'magnitude'
+  viewMode: 'combined', // 'combined' | 'edges' | 'vectors' | 'magnitude'
   renderTarget: 'canvas', // 'canvas' | 'pre'
   verticalFraming: false,
   pipExpanded: false,
@@ -26,14 +75,32 @@ const state = {
   contrastBoost: 1.16,
   rampKey: 'classic',
 
-  // Animation states
-  isRevealing: false,
-  revealProgress: 1.0, // 0..1
-  breezeActive: false,
-  breezePhase: 0,
+  // Choreography & Story state (Always alive by default!)
+  choreography: 'story', // 'story' | 'bloom' | 'curtain' | 'pulse'
+  motionPlaying: true,
+  storyAutoCycle: true,
+  storyAct: 1, // 1..5
+  storyActProgress: 0, // 0..1 within current act
+  phase: 0,
+  bloomFactor: 1.0,
+
+  // Split-Screen X-Ray Curtain (Foto Real <-> Arte ASCII)
+  curtainEnabled: false,
+  curtainPos: 0.42, // 0..1
+  isDraggingCurtain: false,
+
+  // Interactive Pointer Wind & Click Shockwaves
+  pointerWind: {
+    active: false,
+    normX: 0.5,
+    normY: 0.5,
+    forceX: 0
+  },
+  shockwaves: [],
+  pollenParticles: [],
 
   // Live code dock state
-  activeCodeLine: 11, // 0..11
+  activeCodeLine: 0, // 0..11
   flashedStages: new Set(),
 
   // Pyodide WebAssembly state
@@ -53,14 +120,66 @@ const state = {
 };
 
 let animFrameId = null;
-let revealStartTime = 0;
+let lastTickTime = 0;
+let storyActStartTime = 0;
 let lastCodeDockSig = '';
+let lastStoryBannerSig = '';
 let proceduralRawCanvas = null;
 let proceduralCroppedCanvas = null;
-const REVEAL_DURATION_MS = 3800;
+
+// Duración de cada acto en el Modo Historia automático (ms)
+const ACT_DURATIONS_MS = [2900, 2900, 2900, 3200, 6500];
 
 function prefersReducedMotion() {
   return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+}
+
+function initPollenParticles(count = 28) {
+  const glyphs = ['✦', '*', '+', '·', '°'];
+  const colors = [
+    [253, 224, 71],  // Polen dorado
+    [251, 146, 60],  // Naranja fuego
+    [96, 165, 250],  // Azul cobalto
+    [74, 222, 128],  // Verde esmeralda
+    [244, 63, 94]    // Carmesí
+  ];
+  state.pollenParticles = Array.from({ length: count }, (_, i) => ({
+    x: 0.18 + Math.random() * 0.68,
+    y: 0.15 + Math.random() * 0.65,
+    vx: (Math.random() - 0.5) * 0.0025,
+    vy: -0.0022 - Math.random() * 0.0032,
+    glyph: glyphs[i % glyphs.length],
+    rgb: colors[i % colors.length],
+    phase: Math.random() * Math.PI * 2,
+    sizeBoost: (i % 3) * 0.15
+  }));
+}
+
+function spawnPollenBurst(normX, normY, count = 7) {
+  const glyphs = ['✦', '*', '+'];
+  const colors = [
+    [253, 224, 71],
+    [251, 146, 60],
+    [96, 165, 250]
+  ];
+  for (let i = 0; i < count; i++) {
+    const angle = (Math.PI * 2 * i) / count + Math.random() * 0.5;
+    const speed = 0.004 + Math.random() * 0.005;
+    state.pollenParticles.push({
+      x: normX,
+      y: normY,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed - 0.002,
+      glyph: glyphs[i % glyphs.length],
+      rgb: colors[i % colors.length],
+      phase: Math.random() * Math.PI * 2,
+      sizeBoost: 0.35,
+      ttl: 55
+    });
+  }
+  if (state.pollenParticles.length > 64) {
+    state.pollenParticles.splice(0, state.pollenParticles.length - 64);
+  }
 }
 
 function buildShellHTML() {
@@ -73,29 +192,32 @@ function buildShellHTML() {
           <div class="brand-emblem" aria-hidden="true">/|\\</div>
           <div class="brand-titles">
             <h1>
-              Ave del Paraíso — Arte ASCII con cv2.Sobel
+              Ave del Paraíso — Arte ASCII Vivo con cv2.Sobel
               <span class="species-tag">Strelitzia reginae</span>
             </h1>
             <p class="brand-subtitle">
-              Detección de bordes direccional <code>cv2.Sobel(gray, cv2.CV_64F, dx, dy)</code> + código Python en vivo abajo
+              De la fotografía real a vectores direccionales <code>(| / - \\)</code> y floración cinética en tiempo real
             </p>
           </div>
         </div>
 
         <div class="header-actions">
-          <button type="button" class="btn btn-primary" id="btn-play-scan">
-            ▶ Escaneo Paso a Paso
+          <button type="button" class="btn btn-primary" id="btn-play-story" title="Reproducir explicación visual en 5 pasos">
+            🎬 Historia Explicada (5 Pasos)
           </button>
-          <button type="button" class="btn btn-breeze" id="btn-toggle-breeze">
-            🌬️ Brisa Viva 60fps
+          <button type="button" class="btn btn-breeze active" id="btn-toggle-motion" title="Activar/Pausar movimiento orgánico continuo">
+            🌺 Flor Viva: ACTIVA
+          </button>
+          <button type="button" class="btn" id="btn-toggle-curtain" title="Comparar Foto Original HD vs Arte ASCII con una cortina interactiva">
+            🌗 Cortina Foto ↔ ASCII
           </button>
           <button type="button" class="btn btn-vertical" id="btn-toggle-framing">
             📱 Vista Vertical 9:16
           </button>
-          <button type="button" class="btn" id="btn-export-webm" title="Grabar animación en video WebM 9:16">
+          <button type="button" class="btn" id="btn-export-webm" title="Grabar la historia completa en video WebM 9:16">
             🎥 Exportar WebM
           </button>
-          <button type="button" class="btn" id="btn-export-gif" title="Exportar animación en GIF 9:16">
+          <button type="button" class="btn" id="btn-export-gif" title="Exportar la historia completa en GIF animado 9:16">
             🎞️ Exportar GIF
           </button>
           <button type="button" class="btn" id="btn-copy-ascii">
@@ -116,8 +238,37 @@ function buildShellHTML() {
       </header>
 
       <main class="studio-workspace" id="studio-workspace">
-        <!-- LEFT / MAIN: Split Stage (Top ASCII Flower + Bottom Live Python Code) -->
+        <!-- LEFT / MAIN: Split Stage (Story Explainer + Top ASCII Flower + Bottom Live Python Code) -->
         <section class="sobel-split-stage" aria-label="Terminal de Arte ASCII y Código en Vivo">
+          <!-- INTERACTIVE 5-STEP STORY STEPPER (Solves "no le entienden") -->
+          <div class="story-guide-bar" id="story-guide-bar">
+            <div class="story-steps-pills" role="tablist" aria-label="Pasos de cómo funciona cv2.Sobel">
+              ${STORY_ACTS.map(
+                s => `
+                <button
+                  type="button"
+                  class="story-step-pill ${s.act === 1 ? 'active' : ''}"
+                  data-story-act="${s.act}"
+                  id="btn-story-act-${s.act}"
+                >
+                  ${s.shortLabel}
+                </button>
+              `
+              ).join('')}
+            </div>
+
+            <div class="story-explainer-banner" id="story-explainer-banner">
+              <div class="story-explainer-text">
+                <span class="story-badge" id="story-banner-badge">${STORY_ACTS[0].badge}</span>
+                <strong class="story-title" id="story-banner-title">${STORY_ACTS[0].title}</strong>
+                <p class="story-subtitle" id="story-banner-subtitle">${STORY_ACTS[0].subtitle}</p>
+              </div>
+              <div class="story-progress-track">
+                <div class="story-progress-fill" id="story-progress-fill" style="width: 15%"></div>
+              </div>
+            </div>
+          </div>
+
           <div class="stage-topbar">
             <div class="window-dots">
               <span class="win-dot crimson"></span>
@@ -131,7 +282,10 @@ function buildShellHTML() {
                 🌺 Sobel + Color
               </button>
               <button type="button" class="mode-tab" data-view-mode="edges" id="tab-mode-edges">
-                📐 Solo Bordes (/ | \\ -)
+                📐 Trazos (/ | \\ -)
+              </button>
+              <button type="button" class="mode-tab" data-view-mode="vectors" id="tab-mode-vectors">
+                🧭 Flechas ∇I (→ ↗ ↑)
               </button>
               <button type="button" class="mode-tab" data-view-mode="magnitude" id="tab-mode-magnitude">
                 🔥 Magnitud |G|
@@ -142,20 +296,42 @@ function buildShellHTML() {
             </div>
           </div>
 
-          <!-- UPPER VIEWPORT: ASCII Art Canvas + Reference PiP -->
+          <!-- UPPER VIEWPORT: ASCII Art Canvas + X-Ray Magnifier Lens + Reference PiP -->
           <div class="ascii-viewport-wrapper" id="ascii-viewport-wrapper">
             <canvas
               class="ascii-canvas"
               id="ascii-canvas"
               role="img"
-              aria-label="Arte ASCII direccional de la flor Ave del Paraíso generado con cv2.Sobel"
+              aria-label="Arte ASCII direccional vivo de la flor Ave del Paraíso generado con cv2.Sobel"
             ></canvas>
             <div class="sr-only" id="ascii-sr-summary" aria-live="polite"></div>
             <pre class="ascii-pre-selectable" id="ascii-pre" hidden></pre>
 
-            <div class="reference-pip" id="reference-pip" title="Haz clic para ampliar/reducir la referencia original">
+            <!-- Floating X-Ray Magnifier Lens on Hover/Touch -->
+            <div class="xray-lens-card" id="xray-lens-card" hidden>
+              <div class="xray-lens-header">
+                <span>🔬 Lupa Rayos X cv2.Sobel</span>
+                <code id="xray-coord-label">(0, 0)</code>
+              </div>
+              <div class="xray-lens-body">
+                <canvas id="xray-patch-canvas" width="76" height="76"></canvas>
+                <div class="xray-lens-math">
+                  <div class="xray-glyph-row">
+                    <span class="xray-big-arrow" id="xray-arrow-char">↗</span>
+                    <span class="xray-equals">→</span>
+                    <span class="xray-big-glyph" id="xray-edge-char">/</span>
+                  </div>
+                  <div class="xray-angle-line" id="xray-angle-text">Ángulo: 45°</div>
+                  <div class="xray-plain-explain" id="xray-plain-explain">
+                    Borde diagonal detectado
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="reference-pip" id="reference-pip" title="Haz clic para ampliar/reducir la foto original">
               <div class="reference-pip-header">
-                <span>Ref. Original</span>
+                <span>Foto Original</span>
                 <span id="pip-toggle-label">🔍</span>
               </div>
               <canvas id="pip-canvas" aria-label="Miniatura de la imagen de referencia original"></canvas>
@@ -165,7 +341,7 @@ function buildShellHTML() {
           <!-- MATHEMATICAL SOBEL CELL INSPECTOR HUD -->
           <div class="sobel-hud-bar" id="sobel-hud-bar">
             <div class="hud-metrics" id="hud-metrics-content">
-              <span class="hud-pill">Pasa el cursor o toca la flor para inspeccionar <strong>Gx, Gy, |G| y θ°</strong> de cada celda ASCII</span>
+              <span class="hud-pill">✨ <strong>Interactivo:</strong> Mueve el cursor para crear viento y ver la Lupa Rayos X • Haz clic en la flor para lanzar una <strong>Onda Vectorial</strong></span>
             </div>
             <div class="hud-metrics">
               <span class="hud-pill" id="pyodide-runtime-pill" hidden>
@@ -184,7 +360,6 @@ function buildShellHTML() {
                 <span>ave_del_paraiso_sobel.py — Código en Vivo Sincronizado</span>
               </div>
               <div class="header-actions">
-                <span class="code-dock-subtitle">Haz clic en cualquier línea para inspeccionar su etapa</span>
                 <button
                   type="button"
                   class="btn btn-sm btn-pyodide"
@@ -202,6 +377,14 @@ function buildShellHTML() {
               </div>
             </div>
 
+            <!-- PLAIN-SPANISH TRANSLATION OF ACTIVE CODE LINE -->
+            <div class="code-plain-explainer" id="code-plain-explainer">
+              <span class="explainer-icon">💡</span>
+              <span id="code-plain-explainer-text">
+                Haz clic en cualquier línea de código para ver qué hace en español sencillo y resaltar su efecto en la flor.
+              </span>
+            </div>
+
             <div class="code-lines-container" id="live-code-lines"></div>
 
             <div class="cli-command-bar">
@@ -211,8 +394,32 @@ function buildShellHTML() {
           </div>
         </section>
 
-        <!-- RIGHT SIDEBAR: Interactive Parameters & Sobel Kernel Matrices -->
+        <!-- RIGHT SIDEBAR: Choreography, Interactive Parameters & Sobel Kernel Matrices -->
         <aside class="controls-sidebar" aria-label="Controles del Pipeline cv2.Sobel">
+          <div class="panel-card">
+            <div class="panel-heading">
+              <h2>Coreografía Visual</h2>
+              <span class="panel-tag">En Vivo</span>
+            </div>
+            <div class="choreo-grid" id="choreo-grid">
+              <button type="button" class="source-btn active" data-choreo="story">
+                🎬 Historia 5 Pasos
+              </button>
+              <button type="button" class="source-btn" data-choreo="bloom">
+                🌺 Floración + Polen
+              </button>
+              <button type="button" class="source-btn" data-choreo="curtain">
+                🌗 Cortina Foto↔ASCII
+              </button>
+              <button type="button" class="source-btn" data-choreo="pulse">
+                ⚡ Pulso Bioluminiscente
+              </button>
+            </div>
+            <button type="button" class="btn" id="btn-trigger-shockwave" style="width: 100%; justify-content: center; margin-top: 6px;">
+              💥 Lanzar Onda de Choque Vectorial
+            </button>
+          </div>
+
           <div class="panel-card">
             <div class="panel-heading">
               <h2>Fuente Botánica</h2>
@@ -223,7 +430,7 @@ function buildShellHTML() {
                 🌺 Foto Estudio HD
               </button>
               <button type="button" class="source-btn" data-source="procedural" id="btn-src-procedural">
-                🎨 Vector Procedural
+                🎨 Flor Cinética 2D
               </button>
             </div>
             <label class="upload-label" for="input-upload-image">
@@ -297,33 +504,31 @@ function buildShellHTML() {
 
           <div class="panel-card">
             <div class="panel-heading">
-              <h2>Matrices de Convolución</h2>
+              <h2>¿Por qué cv2.Sobel?</h2>
               <span class="panel-tag" id="kernel-tag-label">ksize=3</span>
             </div>
             <p style="font-size: 0.76rem; color: var(--text-secondary);">
-              Cada celda calcula <code style="color: var(--strelitzia-orange);">Gx</code> y
-              <code style="color: var(--strelitzia-blue);">Gy</code> para elegir el trazo tangente al pétalo:
+              Un ASCII común solo mide brillo. <strong>cv2.Sobel</strong> mide hacia dónde apunta cada borde (<code style="color: var(--strelitzia-orange);">Gx</code>, <code style="color: var(--strelitzia-blue);">Gy</code>) para dibujar la silueta exacta:
             </p>
-            <div class="kernels-grid" id="kernels-matrix-view"></div>
-
-            <div class="compass-legend">
+            <div class="compass-legend" style="margin-bottom: 10px;">
               <div class="compass-item">
                 <div class="compass-glyph">|</div>
-                <div class="compass-angle">0° / 180°</div>
+                <div class="compass-angle">Vertical</div>
               </div>
               <div class="compass-item">
                 <div class="compass-glyph">/</div>
-                <div class="compass-angle">45°</div>
+                <div class="compass-angle">Diagonal 45°</div>
               </div>
               <div class="compass-item">
                 <div class="compass-glyph">-</div>
-                <div class="compass-angle">90°</div>
+                <div class="compass-angle">Horizontal</div>
               </div>
               <div class="compass-item">
                 <div class="compass-glyph">\\</div>
-                <div class="compass-angle">135°</div>
+                <div class="compass-angle">Diagonal 135°</div>
               </div>
             </div>
+            <div class="kernels-grid" id="kernels-matrix-view"></div>
           </div>
         </aside>
       </main>
@@ -385,18 +590,21 @@ function getLivePythonLines() {
       num: '01',
       stage: 'import',
       badge: 'import',
+      explain: 'Importamos OpenCV (cv2) para visión artificial y NumPy (np) para cálculo matricial rápido.',
       html: `<span class="tok-kw">import</span> cv2, numpy <span class="tok-kw">as</span> np, sys`
     },
     {
       num: '02',
       stage: 'input',
-      badge: 'input',
+      badge: 'foto real',
+      explain: 'Cargamos la fotografía real de la flor Ave del Paraíso (o el modelo cinético 2D).',
       html: `img = cv2.<span class="tok-fn">imread</span>(<span class="tok-str">${imgName}</span>)  <span class="tok-cmt"># Strelitzia reginae</span>`
     },
     {
       num: '03',
       stage: 'resize',
-      badge: 'resize',
+      badge: 'rejilla',
+      explain: `Ajustamos la imagen a una cuadrícula de ${state.cols} columnas × ${state.gridData ? state.gridData.rows : 53} filas de caracteres ASCII.`,
       html: `resized = cv2.<span class="tok-fn">resize</span>(img, (<span class="tok-live-val">${state.cols}</span>, <span class="tok-num">${
         state.gridData ? state.gridData.rows : 53
       }</span>), interpolation=cv2.INTER_AREA)`
@@ -404,7 +612,8 @@ function getLivePythonLines() {
     {
       num: '04',
       stage: 'hsv',
-      badge: 'hsv',
+      badge: 'color vivo',
+      explain: `Multiplicamos la saturación (${state.saturationBoost.toFixed(2)}×) y el brillo (${state.contrastBoost.toFixed(2)}×) para encender el naranja y azul cobalto.`,
       html: `hsv = cv2.<span class="tok-fn">cvtColor</span>(resized, cv2.COLOR_BGR2HSV) * [<span class="tok-num">1</span>, <span class="tok-live-val">${state.saturationBoost.toFixed(
         2
       )}</span>, <span class="tok-live-val">${state.contrastBoost.toFixed(2)}</span>]`
@@ -412,49 +621,57 @@ function getLivePythonLines() {
     {
       num: '05',
       stage: 'blur',
-      badge: 'blur',
+      badge: 'suavizado',
+      explain: 'Convertimos a escala de grises y aplicamos un filtro Gaussiano 3×3 para limpiar ruido antes de medir bordes.',
       html: `gray = cv2.<span class="tok-fn">GaussianBlur</span>(cv2.<span class="tok-fn">cvtColor</span>(resized, cv2.COLOR_BGR2GRAY), (<span class="tok-num">3</span>, <span class="tok-num">3</span>), <span class="tok-num">0</span>)`
     },
     {
       num: '06',
       stage: 'sobel_x',
-      badge: 'Sobel Gx',
-      html: `gx = cv2.<span class="tok-fn">Sobel</span>(gray, cv2.CV_64F, <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-live-val">${preset.pyArg}</span>)  <span class="tok-cmt"># ∂I/∂x</span>`
+      badge: 'Sobel Gx (|)',
+      explain: 'Derivada horizontal Gx: detecta dónde cambia la luz de izquierda a derecha (bordes verticales "|").',
+      html: `gx = cv2.<span class="tok-fn">Sobel</span>(gray, cv2.CV_64F, <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-live-val">${preset.pyArg}</span>)  <span class="tok-cmt"># ∂I/∂x → |</span>`
     },
     {
       num: '07',
       stage: 'sobel_y',
-      badge: 'Sobel Gy',
-      html: `gy = cv2.<span class="tok-fn">Sobel</span>(gray, cv2.CV_64F, <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-live-val">${preset.pyArg}</span>)  <span class="tok-cmt"># ∂I/∂y</span>`
+      badge: 'Sobel Gy (-)',
+      explain: 'Derivada vertical Gy: detecta dónde cambia la luz de arriba a abajo (bordes horizontales "-").',
+      html: `gy = cv2.<span class="tok-fn">Sobel</span>(gray, cv2.CV_64F, <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-live-val">${preset.pyArg}</span>)  <span class="tok-cmt"># ∂I/∂y → -</span>`
     },
     {
       num: '08',
       stage: 'mag',
-      badge: 'magnitud',
+      badge: 'fuerza |G|',
+      explain: 'Teorema de Pitágoras hypot(Gx, Gy): calcula qué tan fuerte es el borde de cada pétalo de 0 a 255.',
       html: `mag = np.<span class="tok-fn">hypot</span>(gx, gy) / np.<span class="tok-fn">hypot</span>(gx, gy).<span class="tok-fn">max</span>() * <span class="tok-num">255.0</span>`
     },
     {
       num: '09',
       stage: 'angle',
-      badge: 'ángulo θ',
+      badge: 'ángulo θ°',
+      explain: 'Arcotangente arctan2(Gy, Gx): calcula el ángulo exacto (0° a 180°) hacia donde se inclina cada pétalo.',
       html: `angle = (np.<span class="tok-fn">degrees</span>(np.<span class="tok-fn">arctan2</span>(gy, gx)) + <span class="tok-num">180.0</span>) % <span class="tok-num">180.0</span>`
     },
     {
       num: '10',
       stage: 'map_edge',
-      badge: 'vectores',
+      badge: 'brújula /|\\-',
+      explain: "Traduce el ángulo θ° al símbolo ASCII que dibuja la inclinación real del pétalo: '|', '/', '-' o '\\'.",
       html: `edge_ch = np.<span class="tok-fn">select</span>([angle&lt;<span class="tok-num">22.5</span>, angle&lt;<span class="tok-num">67.5</span>, angle&lt;<span class="tok-num">112.5</span>, angle&lt;<span class="tok-num">157.5</span>], [<span class="tok-str">'|'</span>,<span class="tok-str">'/'</span>,<span class="tok-str">'-'</span>,<span class="tok-str">'\\\\'</span>], <span class="tok-str">'|'</span>)`
     },
     {
       num: '11',
       stage: 'compose',
-      badge: 'umbral',
+      badge: 'contorno+luz',
+      explain: `Si la fuerza del borde supera ${state.edgeThreshold}, dibuja el trazo direccional (/|\\-); si es interior, sombrea por brillo.`,
       html: `glyph = np.<span class="tok-fn">where</span>(mag &gt;= <span class="tok-live-val">${state.edgeThreshold}</span>, edge_ch, <span class="tok-str">"${rampStr}"</span>[lum_idx])`
     },
     {
       num: '12',
       stage: 'render',
-      badge: 'ANSI 24b',
+      badge: 'ANSI 24-bit',
+      explain: 'Imprime cada carácter coloreado con su código RGB real de 24 bits y anima la flor en tiempo real.',
       html: `sys.stdout.<span class="tok-fn">write</span>(<span class="tok-str">f"\\033[38;2;{r};{g};{b}m{glyph}\\033[0m"</span>)  <span class="tok-cmt"># modo=${state.viewMode}</span>`
     }
   ];
@@ -473,23 +690,52 @@ function buildCliCommandText() {
   return `--width ${state.cols} --threshold ${state.edgeThreshold}${kFlag} --saturation ${state.saturationBoost}${cFlag}${rFlag}${mFlag}`;
 }
 
+function updateStoryBannerUI() {
+  const actObj = STORY_ACTS[Math.max(0, Math.min(4, state.storyAct - 1))];
+  const progPct = Math.round(((state.storyAct - 1 + state.storyActProgress) / 5) * 100);
+  const sig = `${state.storyAct}|${progPct}`;
+  if (sig === lastStoryBannerSig) return;
+  lastStoryBannerSig = sig;
+
+  document.querySelectorAll('[data-story-act]').forEach(btn => {
+    const actNum = Number(btn.getAttribute('data-story-act'));
+    btn.classList.toggle('active', actNum === state.storyAct);
+  });
+
+  const badgeEl = document.getElementById('story-banner-badge');
+  const titleEl = document.getElementById('story-banner-title');
+  const subEl = document.getElementById('story-banner-subtitle');
+  const fillEl = document.getElementById('story-progress-fill');
+
+  if (badgeEl) badgeEl.textContent = actObj.badge;
+  if (titleEl) titleEl.textContent = actObj.title;
+  if (subEl) subEl.textContent = actObj.subtitle;
+  if (fillEl) fillEl.style.width = `${Math.max(6, Math.min(100, progPct))}%`;
+}
+
 function renderLiveCodeDock(force = false) {
   const container = document.getElementById('live-code-lines');
   if (!container) return;
 
   const rows = state.gridData ? state.gridData.rows : 53;
   const flashedKey = Array.from(state.flashedStages).sort().join(',');
-  const sig = `${state.sourceType}|${state.cols}x${rows}|${state.edgeThreshold}|${state.kernelKey}|${state.saturationBoost}|${state.contrastBoost}|${state.rampKey}|${state.viewMode}|${state.activeCodeLine}|${state.isRevealing}|${flashedKey}`;
+  const sig = `${state.sourceType}|${state.cols}x${rows}|${state.edgeThreshold}|${state.kernelKey}|${state.saturationBoost}|${state.contrastBoost}|${state.rampKey}|${state.viewMode}|${state.activeCodeLine}|${flashedKey}`;
 
   if (!force && sig === lastCodeDockSig) return;
   lastCodeDockSig = sig;
 
   const lines = getLivePythonLines();
+  const activeLineObj = lines[Math.max(0, Math.min(lines.length - 1, state.activeCodeLine))];
+
+  const explainerTextEl = document.getElementById('code-plain-explainer-text');
+  if (explainerTextEl && activeLineObj) {
+    explainerTextEl.innerHTML = `<strong>Línea ${activeLineObj.num} (${activeLineObj.badge}):</strong> ${activeLineObj.explain}`;
+  }
+
   container.innerHTML = lines
     .map((line, idx) => {
       const isActive = idx === state.activeCodeLine;
       const isFlashed = state.flashedStages.has(line.stage);
-      const cursorHtml = isActive && state.isRevealing ? '<span class="typewriter-cursor"></span>' : '';
       return `
         <div
           class="code-line ${isActive ? 'active-step' : ''} ${isFlashed ? 'param-flash' : ''}"
@@ -497,7 +743,7 @@ function renderLiveCodeDock(force = false) {
           data-stage="${line.stage}"
         >
           <span class="line-num">${isActive ? '▶ ' : ''}${line.num}</span>
-          <span class="line-content">${line.html}${cursorHtml}</span>
+          <span class="line-content">${line.html}</span>
           <span class="line-badge">${line.badge}</span>
         </div>
       `;
@@ -519,6 +765,27 @@ function flashCodeStages(stages) {
   }, 420);
 }
 
+function computeEffectiveCurtainRatio() {
+  if (state.curtainEnabled || state.choreography === 'curtain') {
+    if (state.isDraggingCurtain || state.curtainEnabled) {
+      return state.curtainPos;
+    }
+    return 0.18 + ((Math.sin(state.phase * 0.55) + 1) * 0.5) * 0.64;
+  }
+  if (state.choreography === 'story') {
+    if (state.storyAct === 1) {
+      // En el Paso 1 mostramos la foto real y la cortina va descubriendo los vectores
+      return Math.max(0.18, 0.92 - state.storyActProgress * 0.55);
+    }
+    if (state.storyAct === 5 && state.storyActProgress > 0.35) {
+      // En el Paso 5 hacemos un barrido suave de cortina Rayos X para comparar Foto vs ASCII
+      const subT = (state.storyActProgress - 0.35) / 0.65;
+      return Math.sin(subT * Math.PI) * 0.58;
+    }
+  }
+  return 0;
+}
+
 function drawAsciiGridToCanvas() {
   if (!state.gridData) return;
   const { grid, cols, rows } = state.gridData;
@@ -530,7 +797,6 @@ function drawAsciiGridToCanvas() {
   const availW = wrapper && wrapper.clientWidth > 120 ? wrapper.clientWidth - 28 : 960;
 
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  // Ajustar celda para que quepa en pantallas móviles sin desbordar horizontalmente
   const defaultCharW = cols > 110 ? 7.2 : cols > 85 ? 8.6 : 10.2;
   const maxFitCharW = Math.max(3.8, (availW - 20) / cols);
   const baseCharW = Math.min(defaultCharW, maxFitCharW);
@@ -554,50 +820,230 @@ function drawAsciiGridToCanvas() {
   ctx.fillStyle = '#04060a';
   ctx.fillRect(0, 0, logicalW, logicalH);
 
+  const padX = 10;
+  const padY = 10;
+  const innerW = cols * baseCharW;
+  const innerH = rows * baseCharH;
+
+  const refCanvas = getSampledReferenceCanvas() || state.sourceCanvas;
+  const curtainRatio = computeEffectiveCurtainRatio();
+  const splitX = curtainRatio > 0.01 ? padX + innerW * curtainRatio : -1;
+
+  // En los pasos 2 y 3 mostramos una silueta tenue de la foto real de fondo para que se entienda dónde cae cada borde
+  if (refCanvas && state.choreography === 'story' && (state.storyAct === 2 || state.storyAct === 3)) {
+    ctx.save();
+    ctx.globalAlpha = 0.22;
+    ctx.drawImage(refCanvas, padX, padY, innerW, innerH);
+    ctx.restore();
+  }
+
+  // Si la cortina Foto Original <-> ASCII está activa, dibujar la foto HD en el lado izquierdo
+  if (refCanvas && splitX > padX + 2) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(padX, padY, splitX - padX, innerH);
+    ctx.clip();
+    ctx.drawImage(refCanvas, padX, padY, innerW, innerH);
+
+    // Superponer vectores direccionales tenues en la franja cercana a la cortina para conectar Foto -> Sobel
+    const vectorBandLeft = Math.max(padX, splitX - baseCharW * 7);
+    ctx.font = `700 ${Math.max(7, Math.round(baseCharH * 0.78))}px "JetBrains Mono", monospace`;
+    ctx.textBaseline = 'top';
+    for (let y = 0; y < rows; y += 2) {
+      const row = grid[y];
+      const py = padY + y * baseCharH;
+      for (let x = 0; x < cols; x += 2) {
+        const px = padX + x * baseCharW;
+        if (px >= vectorBandLeft && px < splitX - 2) {
+          const cell = row[x];
+          if (cell.isEdge && cell.arrowChar !== ' ') {
+            ctx.fillStyle = 'rgba(253, 224, 71, 0.9)';
+            ctx.fillText(cell.arrowChar, px, py);
+          }
+        }
+      }
+    }
+    ctx.restore();
+  }
+
   ctx.font = `600 ${Math.max(6, Math.round(baseCharH * 0.82))}px "JetBrains Mono", ui-monospace, monospace`;
   ctx.textBaseline = 'top';
 
-  const padX = 10;
-  const padY = 10;
-
-  const colorRowLimit = state.isRevealing ? Math.floor(state.revealProgress * rows) : rows;
-  const edgeScanLimit = state.isRevealing
-    ? Math.min(rows, colorRowLimit + Math.max(5, Math.floor(rows * 0.16)))
-    : rows;
+  // Pulso bioluminiscente viajando por las nervaduras desde el corazón de la espata
+  const centerCol = cols * 0.44;
+  const centerRow = rows * 0.52;
+  const maxDist = Math.hypot(cols, rows) * 0.85;
+  const pulseRadius = (state.phase * 16) % maxDist;
+  const pulseStrength = state.choreography === 'pulse' ? 115 : 65;
 
   for (let y = 0; y < rows; y++) {
-    if (state.isRevealing && y >= edgeScanLimit) continue;
-
-    const inEdgeScanBand = state.isRevealing && y >= colorRowLimit && y < edgeScanLimit;
     const row = grid[y];
     const py = padY + y * baseCharH;
 
     for (let x = 0; x < cols; x++) {
-      const cell = row[x];
-      if (inEdgeScanBand) {
-        if (cell.edgeChar === ' ') continue;
-        ctx.fillStyle = `rgb(${cell.r}, ${cell.g}, ${cell.b})`;
-        ctx.fillText(cell.edgeChar, padX + x * baseCharW, py);
-      } else {
-        if (cell.char === ' ') continue;
-        ctx.fillStyle = `rgb(${cell.r}, ${cell.g}, ${cell.b})`;
-        ctx.fillText(cell.char, padX + x * baseCharW, py);
+      const px = padX + x * baseCharW;
+      if (splitX > padX && px < splitX - baseCharW * 0.45) {
+        continue;
       }
+
+      const cell = row[x];
+      if (cell.char === ' ' && cell.edgeChar === ' ') continue;
+
+      let ch = cell.char;
+      let r = cell.r;
+      let g = cell.g;
+      let b = cell.b;
+
+      // Filtrado pedagógico según el Paso activo en Modo Historia
+      if (state.choreography === 'story') {
+        if (state.storyAct === 2) {
+          // Paso 2: Solo derivada horizontal Gx -> bordes verticales '|'
+          const scanCol = cols * (0.1 + 0.9 * state.storyActProgress);
+          if (x > scanCol) continue;
+          if (Math.abs(cell.gx) >= 36 && (cell.edgeChar === '|' || Math.abs(cell.gx) >= Math.abs(cell.gy))) {
+            ch = '|';
+            r = 255;
+            g = 152;
+            b = 46;
+          } else {
+            ch = '·';
+            r = Math.trunc(r * 0.25);
+            g = Math.trunc(g * 0.25);
+            b = Math.trunc(b * 0.25);
+          }
+        } else if (state.storyAct === 3) {
+          // Paso 3: Solo derivada vertical Gy -> bordes horizontales '-'
+          const scanRow = rows * (0.1 + 0.9 * state.storyActProgress);
+          if (y > scanRow) continue;
+          if (Math.abs(cell.gy) >= 36 && (cell.edgeChar === '-' || Math.abs(cell.gy) > Math.abs(cell.gx))) {
+            ch = '-';
+            r = 76;
+            g = 175;
+            b = 255;
+          } else {
+            ch = '·';
+            r = Math.trunc(r * 0.25);
+            g = Math.trunc(g * 0.25);
+            b = Math.trunc(b * 0.25);
+          }
+        } else if (state.storyAct === 4) {
+          // Paso 4: Brújula de ángulos: flechas ∇I (→ ↗ ↑) transformándose en trazos tangentes (/ | \ -)
+          if (cell.edgeChar === ' ') continue;
+          const morphX = cols * state.storyActProgress;
+          if (x < morphX) {
+            ch = cell.edgeChar;
+            r = Math.min(255, r + 30);
+            g = Math.min(255, g + 30);
+            b = Math.min(255, b + 30);
+          } else {
+            ch = cell.arrowChar || cell.edgeChar;
+            r = 253;
+            g = 224;
+            b = 71;
+          }
+        }
+      }
+
+      // Ondas de choque interactivas al hacer clic sobre la flor
+      for (let s = 0; s < state.shockwaves.length; s++) {
+        const sw = state.shockwaves[s];
+        const d = Math.hypot(x - sw.col, y - sw.row);
+        const diff = Math.abs(d - sw.radius);
+        if (diff < 3.5) {
+          const wFactor = 1 - diff / 3.5;
+          if (cell.edgeChar !== ' ') {
+            ch = cell.arrowChar || cell.edgeChar;
+          }
+          r = Math.min(255, Math.round(r + 120 * wFactor));
+          g = Math.min(255, Math.round(g + 110 * wFactor));
+          b = Math.min(255, Math.round(b + 140 * wFactor));
+        }
+      }
+
+      // Pulso bioluminiscente periódico por las nervaduras de los pétalos
+      if (cell.isEdge) {
+        const distFromHub = Math.hypot(x - centerCol, y - centerRow);
+        const ringDiff = Math.abs(distFromHub - pulseRadius);
+        if (ringDiff < 3.4) {
+          const boost = (1 - ringDiff / 3.4) * pulseStrength;
+          r = Math.min(255, Math.round(r + boost));
+          g = Math.min(255, Math.round(g + boost * 0.9));
+          b = Math.min(255, Math.round(b + boost));
+        }
+      }
+
+      if (ch === ' ') continue;
+      ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+      ctx.fillText(ch, px, py);
     }
   }
 
-  // Draw laser scanline during progressive scan reveal
-  if (state.isRevealing && colorRowLimit < rows) {
-    const scanY = padY + colorRowLimit * baseCharH;
-    const grad = ctx.createLinearGradient(0, scanY - 4, logicalW, scanY + 4);
-    grad.addColorStop(0, 'rgba(250, 122, 37, 0)');
-    grad.addColorStop(0.5, 'rgba(250, 204, 46, 0.75)');
-    grad.addColorStop(1, 'rgba(59, 130, 246, 0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, scanY - 1, logicalW, 2.5);
+  // Dibujar partículas bioluminiscentes de polen ASCII flotando desde la cresta
+  if (state.pollenParticles.length > 0) {
+    ctx.font = `700 ${Math.max(9, Math.round(baseCharH * 0.92))}px "JetBrains Mono", monospace`;
+    for (let i = 0; i < state.pollenParticles.length; i++) {
+      const p = state.pollenParticles[i];
+      const px = padX + p.x * innerW;
+      const py = padY + p.y * innerH;
+      if (px < splitX + 6) continue;
+      const alpha = 0.45 + 0.55 * Math.sin(state.phase * 2.4 + p.phase);
+      ctx.fillStyle = `rgba(${p.rgb[0]}, ${p.rgb[1]}, ${p.rgb[2]}, ${alpha.toFixed(2)})`;
+      ctx.fillText(p.glyph, px, py);
+    }
   }
 
-  // Draw Sobel kernel inspection reticle if user is hovering a cell
+  // Dibujar línea divisoria y tirador de la Cortina Interactiva Foto <-> ASCII
+  if (splitX > padX + 4 && splitX < padX + innerW - 4) {
+    const grad = ctx.createLinearGradient(0, padY, 0, padY + innerH);
+    grad.addColorStop(0, 'rgba(250, 122, 37, 0.2)');
+    grad.addColorStop(0.5, 'rgba(250, 204, 46, 0.98)');
+    grad.addColorStop(1, 'rgba(59, 130, 246, 0.2)');
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(splitX, padY);
+    ctx.lineTo(splitX, padY + innerH);
+    ctx.stroke();
+
+    // Etiquetas "FOTO REAL" | "ARTE ASCII cv2.Sobel"
+    ctx.font = `700 11px "JetBrains Mono", monospace`;
+    ctx.textBaseline = 'middle';
+    if (splitX > padX + 95) {
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+      ctx.fillRect(splitX - 90, padY + 10, 82, 22);
+      ctx.strokeStyle = 'rgba(250, 204, 46, 0.6)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(splitX - 90, padY + 10, 82, 22);
+      ctx.fillStyle = '#fde047';
+      ctx.fillText('📸 FOTO HD', splitX - 83, padY + 21);
+    }
+    if (splitX < padX + innerW - 125) {
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
+      ctx.fillRect(splitX + 8, padY + 10, 112, 22);
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.6)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(splitX + 8, padY + 10, 112, 22);
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillText('📐 ASCII Sobel', splitX + 15, padY + 21);
+    }
+
+    // Tirador central circular
+    const handleY = padY + innerH * 0.5;
+    ctx.beginPath();
+    ctx.arc(splitX, handleY, 13, 0, Math.PI * 2);
+    ctx.fillStyle = '#0f172a';
+    ctx.fill();
+    ctx.strokeStyle = '#facc15';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = '#fde047';
+    ctx.font = '700 11px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('↔', splitX, handleY + 0.5);
+    ctx.textAlign = 'start';
+  }
+
+  // Retícula de inspección del kernel Sobel al pasar el cursor
   if (state.hoveredCell) {
     const { col, row } = state.hoveredCell;
     const preset = KERNEL_PRESETS[state.kernelKey] || KERNEL_PRESETS['3'];
@@ -606,19 +1052,84 @@ function drawAsciiGridToCanvas() {
     if (col >= 0 && col < cols && row >= 0 && row < rows) {
       const rx = padX + (col - kHalf) * baseCharW - 1;
       const ry = padY + (row - kHalf) * baseCharH - 1;
-      ctx.strokeStyle = 'rgba(250, 204, 46, 0.85)';
-      ctx.lineWidth = 1.3;
+      ctx.strokeStyle = 'rgba(250, 204, 46, 0.9)';
+      ctx.lineWidth = 1.4;
       ctx.strokeRect(rx, ry, baseCharW * kDim + 2, baseCharH * kDim + 2);
     }
   }
 
   ctx.restore();
 
-  // Save cell geometry on canvas dataset for pointer inspection
   canvas.dataset.charW = String(baseCharW);
   canvas.dataset.charH = String(baseCharH);
   canvas.dataset.padX = String(padX);
   canvas.dataset.padY = String(padY);
+}
+
+function updateXRayMagnifierLens(cellInfo) {
+  const card = document.getElementById('xray-lens-card');
+  if (!card) return;
+
+  if (!cellInfo || cellInfo.cell.char === ' ') {
+    card.hidden = true;
+    return;
+  }
+
+  card.hidden = false;
+  const { col, row, cell } = cellInfo;
+  const coordEl = document.getElementById('xray-coord-label');
+  const arrowEl = document.getElementById('xray-arrow-char');
+  const edgeEl = document.getElementById('xray-edge-char');
+  const angleEl = document.getElementById('xray-angle-text');
+  const explainEl = document.getElementById('xray-plain-explain');
+
+  if (coordEl) coordEl.textContent = `celda (${col}, ${row})`;
+  if (arrowEl) {
+    arrowEl.textContent = cell.arrowChar !== ' ' ? cell.arrowChar : '•';
+    arrowEl.style.color = `rgb(${cell.r}, ${cell.g}, ${cell.b})`;
+  }
+  if (edgeEl) {
+    edgeEl.textContent = cell.char;
+    edgeEl.style.color = `rgb(${cell.r}, ${cell.g}, ${cell.b})`;
+  }
+  if (angleEl) {
+    angleEl.textContent = `Gx:${cell.gx}  Gy:${cell.gy}  θ:${cell.angle}°`;
+  }
+  if (explainEl) {
+    if (cell.isEdge) {
+      const dirDesc =
+        cell.edgeChar === '|'
+          ? 'Borde vertical'
+          : cell.edgeChar === '-'
+          ? 'Borde horizontal'
+          : 'Borde diagonal';
+      explainEl.textContent = `${dirDesc} (|G|=${cell.mag}) → traza '${cell.edgeChar}'`;
+    } else {
+      explainEl.textContent = `Interior de pétalo (luz=${cell.lum}) → sombrea '${cell.char}'`;
+    }
+  }
+
+  // Dibujar parche 7x7 de la foto real con el vector gradiente encima
+  const patchCanvas = document.getElementById('xray-patch-canvas');
+  const refCanvas = getSampledReferenceCanvas() || state.sourceCanvas;
+  if (patchCanvas && refCanvas && state.gridData) {
+    const pCtx = patchCanvas.getContext('2d');
+    const pw = patchCanvas.width;
+    const ph = patchCanvas.height;
+    pCtx.fillStyle = '#04060a';
+    pCtx.fillRect(0, 0, pw, ph);
+
+    pCtx.imageSmoothingEnabled = false;
+    const sx = Math.max(0, col - 3);
+    const sy = Math.max(0, row - 3);
+    pCtx.drawImage(refCanvas, sx, sy, 7, 7, 0, 0, pw, ph);
+
+    // Cuadrícula y celda central
+    pCtx.strokeStyle = 'rgba(250, 204, 46, 0.85)';
+    pCtx.lineWidth = 1.5;
+    const cellPx = pw / 7;
+    pCtx.strokeRect(cellPx * 3, cellPx * 3, cellPx, cellPx);
+  }
 }
 
 function renderSelectablePre() {
@@ -653,20 +1164,19 @@ function updateStatsAndHud() {
   if (activeEl) activeEl.textContent = String(stats.activeCount);
 
   const preset = KERNEL_PRESETS[state.kernelKey] || KERNEL_PRESETS['3'];
-  const summaryText = `Flor Ave del Paraíso en arte ASCII (${cols} columnas por ${rows} filas), operador ${preset.label}, ${stats.activeCount} celdas activas y ${stats.edgeRatio}% de bordes direccionales.`;
+  const summaryText = `Flor Ave del Paraíso en arte ASCII vivo (${cols} columnas por ${rows} filas), operador ${preset.label}, ${stats.activeCount} celdas activas y ${stats.edgeRatio}% de bordes direccionales.`;
   const canvas = document.getElementById('ascii-canvas');
   if (canvas) canvas.setAttribute('aria-label', summaryText);
-  const srEl = document.getElementById('ascii-sr-summary');
-  if (srEl && !state.breezeActive) srEl.textContent = summaryText;
 }
 
 function updateHoverHud(cellInfo) {
   const hud = document.getElementById('hud-metrics-content');
+  updateXRayMagnifierLens(cellInfo);
   if (!hud) return;
 
   if (!cellInfo || cellInfo.cell.char === ' ') {
     hud.innerHTML = `
-      <span class="hud-pill">Pasa el cursor o toca la flor para inspeccionar <strong>Gx, Gy, |G| y θ°</strong> de cada celda ASCII</span>
+      <span class="hud-pill">✨ <strong>Interactivo:</strong> Mueve el cursor para crear viento y ver la Lupa Rayos X • Haz clic en la flor para lanzar una <strong>Onda Vectorial</strong></span>
     `;
     return;
   }
@@ -677,7 +1187,7 @@ function updateHoverHud(cellInfo) {
 
   hud.innerHTML = `
     <span class="hud-pill">Celda: <strong>(${col}, ${row})</strong></span>
-    <span class="hud-pill">Glifo: <span class="hud-glyph-badge">${cell.char}</span> <span>${kindLabel}</span></span>
+    <span class="hud-pill">Vector: <strong>${cell.arrowChar || '•'}</strong> → <span class="hud-glyph-badge">${cell.char}</span> <span>${kindLabel}</span></span>
     <span class="hud-pill">Gx: <strong>${cell.gx}</strong></span>
     <span class="hud-pill">Gy: <strong>${cell.gy}</strong></span>
     <span class="hud-pill">|G|: <strong>${cell.mag}</strong>/255</span>
@@ -689,14 +1199,14 @@ function updateHoverHud(cellInfo) {
   `;
 }
 
-function computeFrameForPhase(breezePhaseOverride = null) {
+function computeFrameForPhase(breezePhaseOverride = null, bloomFactorOverride = 1.0) {
   if (!state.sourceCanvas) return null;
 
   let canvasToSample = state.sourceCanvas;
-  if (state.sourceType === 'procedural' && breezePhaseOverride !== null) {
+  if (state.sourceType === 'procedural' && (breezePhaseOverride !== null || bloomFactorOverride !== 1.0)) {
     if (!proceduralRawCanvas) proceduralRawCanvas = document.createElement('canvas');
     if (!proceduralCroppedCanvas) proceduralCroppedCanvas = document.createElement('canvas');
-    renderProceduralStrelitziaToCanvas(proceduralRawCanvas, breezePhaseOverride);
+    renderProceduralStrelitziaToCanvas(proceduralRawCanvas, breezePhaseOverride || 0, bloomFactorOverride);
     canvasToSample = extractCroppedImageCanvas(proceduralRawCanvas, proceduralCroppedCanvas);
   }
 
@@ -709,23 +1219,25 @@ function computeFrameForPhase(breezePhaseOverride = null) {
     rampKey: state.rampKey,
     viewMode: state.viewMode,
     breezePhase: state.sourceType !== 'procedural' ? breezePhaseOverride : null,
+    bloomFactor: state.sourceType !== 'procedural' ? bloomFactorOverride : 1.0,
+    pointerWind: state.pointerWind.active ? state.pointerWind : null,
     sourceVersion: state.sourceVersion
   });
 }
 
-function recomputeAndRender(breezePhaseOverride = null) {
+function recomputeAndRender(breezePhaseOverride = null, bloomFactorOverride = 1.0) {
   if (!state.sourceCanvas) return;
 
-  if (state.sourceType === 'procedural' && breezePhaseOverride !== null) {
+  if (state.sourceType === 'procedural' && (breezePhaseOverride !== null || bloomFactorOverride !== 1.0)) {
     if (!proceduralRawCanvas) proceduralRawCanvas = document.createElement('canvas');
     if (!proceduralCroppedCanvas) proceduralCroppedCanvas = document.createElement('canvas');
-    renderProceduralStrelitziaToCanvas(proceduralRawCanvas, breezePhaseOverride);
+    renderProceduralStrelitziaToCanvas(proceduralRawCanvas, breezePhaseOverride || 0, bloomFactorOverride);
     state.sourceCanvas = extractCroppedImageCanvas(proceduralRawCanvas, proceduralCroppedCanvas);
     state.sourceVersion++;
     renderPipPreview();
   }
 
-  state.gridData = computeFrameForPhase(breezePhaseOverride);
+  state.gridData = computeFrameForPhase(breezePhaseOverride, bloomFactorOverride);
 
   updateStatsAndHud();
   if (state.renderTarget === 'canvas') {
@@ -744,36 +1256,96 @@ function renderPipPreview() {
   pipCanvas.getContext('2d').drawImage(state.sourceCanvas, 0, 0);
 }
 
-function startAnimationLoop() {
-  if (animFrameId) cancelAnimationFrame(animFrameId);
-
-  const tick = now => {
-    let needsNext = false;
-
-    if (state.isRevealing) {
-      const elapsed = now - revealStartTime;
-      const prog = Math.min(1.0, elapsed / REVEAL_DURATION_MS);
-      state.revealProgress = prog;
-      state.activeCodeLine = Math.min(11, Math.floor(prog * 12));
-
-      if (prog >= 1.0) {
-        state.isRevealing = false;
-        state.activeCodeLine = 11;
-      } else {
-        needsNext = true;
+function updateParticlesAndShockwaves() {
+  // Actualizar partículas de polen bioluminiscente
+  for (let i = state.pollenParticles.length - 1; i >= 0; i--) {
+    const p = state.pollenParticles[i];
+    p.x += p.vx + Math.sin(state.phase * 1.4 + p.phase) * 0.0018;
+    p.y += p.vy;
+    if (state.pointerWind.active) {
+      const dy = Math.abs(p.y - state.pointerWind.normY);
+      if (dy < 0.25) {
+        p.x += state.pointerWind.forceX * 0.006;
       }
     }
-
-    if (state.breezeActive) {
-      state.breezePhase += 0.085;
-      recomputeAndRender(state.breezePhase);
-      needsNext = true;
-    } else {
-      drawAsciiGridToCanvas();
-      renderLiveCodeDock();
+    if (typeof p.ttl === 'number') {
+      p.ttl--;
+      if (p.ttl <= 0) {
+        state.pollenParticles.splice(i, 1);
+        continue;
+      }
     }
+    if (p.y < 0.03 || p.x < 0.04 || p.x > 0.96) {
+      p.y = 0.48 + Math.random() * 0.22;
+      p.x = 0.22 + Math.random() * 0.54;
+    }
+  }
 
-    if (needsNext) {
+  // Actualizar ondas de choque radiales
+  for (let i = state.shockwaves.length - 1; i >= 0; i--) {
+    const sw = state.shockwaves[i];
+    sw.radius += 1.45;
+    if (sw.radius > sw.maxRadius) {
+      state.shockwaves.splice(i, 1);
+    }
+  }
+
+  // Decaimiento suave del viento del cursor
+  if (state.pointerWind.active) {
+    state.pointerWind.forceX *= 0.9;
+    if (Math.abs(state.pointerWind.forceX) < 0.01) {
+      state.pointerWind.active = false;
+    }
+  }
+}
+
+function startAnimationLoop() {
+  if (animFrameId) cancelAnimationFrame(animFrameId);
+  lastTickTime = performance.now();
+  if (!storyActStartTime) storyActStartTime = lastTickTime;
+
+  const tick = now => {
+    const dt = Math.min(64, now - lastTickTime);
+    lastTickTime = now;
+
+    if (state.motionPlaying && state.renderTarget === 'canvas') {
+      state.phase += dt * 0.0032;
+
+      // Avance automático por los 5 pasos del Modo Historia
+      if (state.choreography === 'story' && state.storyAutoCycle) {
+        const actDur = ACT_DURATIONS_MS[state.storyAct - 1] || 3200;
+        const elapsed = now - storyActStartTime;
+        const prog = Math.min(1.0, elapsed / actDur);
+        state.storyActProgress = prog;
+        const actMeta = STORY_ACTS[state.storyAct - 1];
+        if (actMeta) state.activeCodeLine = actMeta.codeLine;
+
+        if (elapsed >= actDur) {
+          state.storyAct = (state.storyAct % 5) + 1;
+          state.storyActProgress = 0;
+          storyActStartTime = now;
+        }
+        updateStoryBannerUI();
+      }
+
+      // Calcular factor de apertura cinética (bloomFactor) según la coreografía
+      if (state.choreography === 'bloom') {
+        // Ciclo continuo de floración: capullo -> apertura total de la cresta -> respiración
+        const cycle = (state.phase * 0.32) % (Math.PI * 2);
+        state.bloomFactor = 0.42 + 0.62 * Math.pow(Math.sin(cycle * 0.5), 2);
+      } else if (state.choreography === 'story' && state.storyAct === 5) {
+        state.bloomFactor = 0.48 + 0.54 * Math.min(1.0, state.storyActProgress * 1.45);
+      } else {
+        // Respiración orgánica continua
+        state.bloomFactor = 0.96 + Math.sin(state.phase * 0.85) * 0.06;
+      }
+
+      updateParticlesAndShockwaves();
+      recomputeAndRender(state.phase, state.bloomFactor);
+      animFrameId = requestAnimationFrame(tick);
+    } else if (state.shockwaves.length > 0) {
+      updateParticlesAndShockwaves();
+      drawAsciiGridToCanvas();
       animFrameId = requestAnimationFrame(tick);
     } else {
       animFrameId = null;
@@ -783,16 +1355,89 @@ function startAnimationLoop() {
   animFrameId = requestAnimationFrame(tick);
 }
 
-function triggerStepByStepScan() {
-  state.isRevealing = true;
-  state.revealProgress = 0.02;
-  state.activeCodeLine = 0;
-  revealStartTime = performance.now();
+function selectStoryAct(actNum, autoCycle = false) {
+  state.choreography = 'story';
+  state.storyAct = Math.max(1, Math.min(5, actNum));
+  state.storyActProgress = autoCycle ? 0.02 : 0.72;
+  state.storyAutoCycle = autoCycle;
+  storyActStartTime = performance.now();
+
+  const actMeta = STORY_ACTS[state.storyAct - 1];
+  if (actMeta) {
+    state.activeCodeLine = actMeta.codeLine;
+  }
+
+  document.querySelectorAll('[data-choreo]').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-choreo') === 'story');
+  });
+
+  updateStoryBannerUI();
+  renderLiveCodeDock(true);
 
   if (state.renderTarget !== 'canvas') {
     toggleSelectableMode(false);
   }
+  if (!state.motionPlaying) {
+    recomputeAndRender(state.phase, 1.0);
+  } else {
+    startAnimationLoop();
+  }
+}
+
+function setChoreography(choreoKey) {
+  state.choreography = choreoKey;
+  document.querySelectorAll('[data-choreo]').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-choreo') === choreoKey);
+  });
+
+  if (choreoKey === 'story') {
+    selectStoryAct(1, true);
+    showToast('🎬 Modo Historia 5 Pasos: explicando cv2.Sobel en vivo');
+  } else if (choreoKey === 'bloom') {
+    state.storyAct = 5;
+    state.storyActProgress = 1;
+    state.curtainEnabled = false;
+    document.getElementById('btn-toggle-curtain')?.classList.remove('active');
+    updateStoryBannerUI();
+    showToast('🌺 Floración Cinética: apertura de sépalos + polen bioluminiscente');
+  } else if (choreoKey === 'curtain') {
+    state.storyAct = 5;
+    state.storyActProgress = 1;
+    updateStoryBannerUI();
+    showToast('🌗 Cortina Rayos X: arrastra la línea amarilla o mira la comparación Foto ↔ ASCII');
+  } else if (choreoKey === 'pulse') {
+    state.storyAct = 5;
+    state.storyActProgress = 1;
+    state.curtainEnabled = false;
+    document.getElementById('btn-toggle-curtain')?.classList.remove('active');
+    updateStoryBannerUI();
+    triggerRadialShockwave();
+    showToast('⚡ Pulso Bioluminiscente en Nervaduras + Ondas Vectoriales');
+  }
+
+  if (!state.motionPlaying) {
+    state.motionPlaying = true;
+    const motionBtn = document.getElementById('btn-toggle-motion');
+    if (motionBtn) {
+      motionBtn.classList.add('active');
+      motionBtn.textContent = '🌺 Flor Viva: ACTIVA';
+    }
+  }
   startAnimationLoop();
+}
+
+function triggerRadialShockwave(colOverride = null, rowOverride = null) {
+  if (!state.gridData) return;
+  const col = colOverride !== null ? colOverride : Math.round(state.gridData.cols * 0.45);
+  const row = rowOverride !== null ? rowOverride : Math.round(state.gridData.rows * 0.5);
+  state.shockwaves.push({
+    col,
+    row,
+    radius: 1,
+    maxRadius: Math.hypot(state.gridData.cols, state.gridData.rows) * 0.85
+  });
+  spawnPollenBurst(col / state.gridData.cols, row / state.gridData.rows, 9);
+  if (!animFrameId) startAnimationLoop();
 }
 
 function setViewMode(mode) {
@@ -800,7 +1445,7 @@ function setViewMode(mode) {
   document.querySelectorAll('[data-view-mode]').forEach(btn => {
     btn.classList.toggle('active', btn.getAttribute('data-view-mode') === mode);
   });
-  recomputeAndRender(state.breezeActive ? state.breezePhase : null);
+  recomputeAndRender(state.motionPlaying ? state.phase : null, state.bloomFactor);
 }
 
 function toggleSelectableMode(forcePre) {
@@ -812,8 +1457,6 @@ function toggleSelectableMode(forcePre) {
   state.renderTarget = toPre ? 'pre' : 'canvas';
 
   if (toPre) {
-    state.breezeActive = false;
-    document.getElementById('btn-toggle-breeze')?.classList.remove('active');
     canvas.hidden = true;
     pre.hidden = false;
     btn?.classList.add('active');
@@ -823,10 +1466,11 @@ function toggleSelectableMode(forcePre) {
     pre.hidden = true;
     btn?.classList.remove('active');
     drawAsciiGridToCanvas();
+    if (state.motionPlaying) startAnimationLoop();
   }
 }
 
-function loadPhotoPreset(autoAnimate = !prefersReducedMotion()) {
+function loadPhotoPreset(autoStart = !prefersReducedMotion()) {
   const img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = () => {
@@ -834,25 +1478,31 @@ function loadPhotoPreset(autoAnimate = !prefersReducedMotion()) {
     state.sourceCanvas = extractCroppedImageCanvas(img);
     state.sourceVersion++;
     renderPipPreview();
-    recomputeAndRender();
-    if (autoAnimate) triggerStepByStepScan();
+    recomputeAndRender(state.phase, state.bloomFactor);
+    if (autoStart) {
+      state.motionPlaying = true;
+      selectStoryAct(1, true);
+    }
   };
   img.onerror = () => {
-    loadProceduralPreset(autoAnimate);
+    loadProceduralPreset(autoStart);
   };
   img.src = './ave-del-paraiso.jpg';
 }
 
-function loadProceduralPreset(autoAnimate = !prefersReducedMotion()) {
+function loadProceduralPreset(autoStart = !prefersReducedMotion()) {
   state.sourceType = 'procedural';
   if (!proceduralRawCanvas) proceduralRawCanvas = document.createElement('canvas');
   if (!proceduralCroppedCanvas) proceduralCroppedCanvas = document.createElement('canvas');
-  renderProceduralStrelitziaToCanvas(proceduralRawCanvas, 0);
+  renderProceduralStrelitziaToCanvas(proceduralRawCanvas, state.phase, state.bloomFactor);
   state.sourceCanvas = extractCroppedImageCanvas(proceduralRawCanvas, proceduralCroppedCanvas);
   state.sourceVersion++;
   renderPipPreview();
-  recomputeAndRender();
-  if (autoAnimate) triggerStepByStepScan();
+  recomputeAndRender(state.phase, state.bloomFactor);
+  if (autoStart) {
+    state.motionPlaying = true;
+    setChoreography('bloom');
+  }
 }
 
 function getFullStandalonePythonCode() {
@@ -992,9 +1642,13 @@ async function handleExportMedia(kind) {
   try {
     const exporterFn = kind === 'webm' ? exportVerticalWebm : exportVerticalGif;
     const label = kind === 'webm' ? 'WebM 9:16' : 'GIF 9:16';
-    showToast(`Generando ${label}... 0%`, 0);
+    showToast(`Generando ${label} con historia en 5 pasos... 0%`, 0);
     await exporterFn(
-      phase => computeFrameForPhase(phase),
+      (phase, bloom) => {
+        const gridData = computeFrameForPhase(phase, bloom);
+        const refCanvas = getSampledReferenceCanvas() || state.sourceCanvas;
+        return { gridData, refCanvas };
+      },
       pct => {
         if (btn) btn.textContent = `⏳ ${pct}%`;
         showToast(`Exportando ${label}... ${pct}%`, 0);
@@ -1019,8 +1673,7 @@ function handleRouteChange() {
   if (!vmContainer || !studioContainer) return;
 
   if (isVmLab) {
-    state.breezeActive = false;
-    document.getElementById('btn-toggle-breeze')?.classList.remove('active');
+    state.motionPlaying = false;
     studioContainer.hidden = true;
     vmContainer.hidden = false;
     renderVmDashboard(vmContainer);
@@ -1034,24 +1687,57 @@ function handleRouteChange() {
 function bindEvents() {
   window.addEventListener('hashchange', handleRouteChange);
   window.addEventListener('resize', () => {
-    if (state.renderTarget === 'canvas' && !state.breezeActive && !state.isRevealing) {
+    if (state.renderTarget === 'canvas' && !state.motionPlaying) {
       drawAsciiGridToCanvas();
     }
   });
 
-  document.getElementById('btn-play-scan')?.addEventListener('click', () => {
-    triggerStepByStepScan();
+  document.getElementById('btn-play-story')?.addEventListener('click', () => {
+    state.motionPlaying = true;
+    const motionBtn = document.getElementById('btn-toggle-motion');
+    if (motionBtn) {
+      motionBtn.classList.add('active');
+      motionBtn.textContent = '🌺 Flor Viva: ACTIVA';
+    }
+    selectStoryAct(1, true);
   });
 
-  document.getElementById('btn-toggle-breeze')?.addEventListener('click', e => {
-    state.breezeActive = !state.breezeActive;
-    e.currentTarget.classList.toggle('active', state.breezeActive);
-    if (state.breezeActive) {
+  document.querySelectorAll('[data-story-act]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const actNum = Number(btn.getAttribute('data-story-act'));
+      selectStoryAct(actNum, false);
+    });
+  });
+
+  document.querySelectorAll('[data-choreo]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setChoreography(btn.getAttribute('data-choreo'));
+    });
+  });
+
+  document.getElementById('btn-trigger-shockwave')?.addEventListener('click', () => {
+    triggerRadialShockwave();
+  });
+
+  document.getElementById('btn-toggle-motion')?.addEventListener('click', e => {
+    state.motionPlaying = !state.motionPlaying;
+    e.currentTarget.classList.toggle('active', state.motionPlaying);
+    e.currentTarget.textContent = state.motionPlaying ? '🌺 Flor Viva: ACTIVA' : '⏸️ Flor Viva: PAUSADA';
+    if (state.motionPlaying) {
       if (state.renderTarget !== 'canvas') toggleSelectableMode(false);
       startAnimationLoop();
     } else {
-      recomputeAndRender(null);
+      recomputeAndRender(null, 1.0);
     }
+  });
+
+  document.getElementById('btn-toggle-curtain')?.addEventListener('click', e => {
+    state.curtainEnabled = !state.curtainEnabled;
+    e.currentTarget.classList.toggle('active', state.curtainEnabled);
+    if (state.curtainEnabled) {
+      showToast('🌗 Cortina activa: arrastra sobre la flor para comparar Foto Real vs Arte ASCII');
+    }
+    drawAsciiGridToCanvas();
   });
 
   document.getElementById('btn-toggle-framing')?.addEventListener('click', e => {
@@ -1080,7 +1766,7 @@ function bindEvents() {
     e.currentTarget.classList.toggle('expanded', state.pipExpanded);
   });
 
-  // Delegated click listener for Live Code Dock lines (no re-binding per frame)
+  // Delegated click listener for Live Code Dock lines
   document.getElementById('live-code-lines')?.addEventListener('click', e => {
     const rowEl = e.target.closest('[data-code-idx]');
     if (!rowEl) return;
@@ -1088,12 +1774,17 @@ function bindEvents() {
     const stage = rowEl.getAttribute('data-stage');
     state.activeCodeLine = idx;
 
-    if (stage === 'sobel_x' || stage === 'sobel_y' || stage === 'map_edge') {
-      setViewMode('edges');
+    if (stage === 'sobel_x') {
+      selectStoryAct(2, false);
+    } else if (stage === 'sobel_y') {
+      selectStoryAct(3, false);
+    } else if (stage === 'angle' || stage === 'map_edge') {
+      selectStoryAct(4, false);
     } else if (stage === 'mag') {
       setViewMode('magnitude');
     } else if (stage === 'compose' || stage === 'render') {
       setViewMode('combined');
+      selectStoryAct(5, false);
     }
     renderLiveCodeDock(true);
   });
@@ -1122,10 +1813,10 @@ function bindEvents() {
         state.sourceCanvas = extractCroppedImageCanvas(img);
         state.sourceVersion++;
         renderPipPreview();
-        recomputeAndRender();
-        triggerStepByStepScan();
+        recomputeAndRender(state.phase, state.bloomFactor);
+        selectStoryAct(1, true);
         flashCodeStages(['input']);
-        showToast('Imagen cargada y procesada con cv2.Sobel');
+        showToast('Imagen cargada: iniciando transformación cv2.Sobel en 5 pasos');
       };
       img.src = ev.target.result;
     };
@@ -1137,7 +1828,7 @@ function bindEvents() {
     state.cols = Number(e.target.value);
     document.getElementById('val-cols').textContent = `${state.cols} cols`;
     state.activeCodeLine = 2;
-    recomputeAndRender(state.breezeActive ? state.breezePhase : null);
+    recomputeAndRender(state.motionPlaying ? state.phase : null, state.bloomFactor);
     flashCodeStages(['resize']);
   });
 
@@ -1145,7 +1836,7 @@ function bindEvents() {
     state.edgeThreshold = Number(e.target.value);
     document.getElementById('val-threshold').textContent = String(state.edgeThreshold);
     state.activeCodeLine = 10;
-    recomputeAndRender(state.breezeActive ? state.breezePhase : null);
+    recomputeAndRender(state.motionPlaying ? state.phase : null, state.bloomFactor);
     flashCodeStages(['compose']);
   });
 
@@ -1153,7 +1844,7 @@ function bindEvents() {
     state.kernelKey = e.target.value;
     state.activeCodeLine = 5;
     renderKernelMatrices();
-    recomputeAndRender(state.breezeActive ? state.breezePhase : null);
+    recomputeAndRender(state.motionPlaying ? state.phase : null, state.bloomFactor);
     flashCodeStages(['sobel_x', 'sobel_y']);
   });
 
@@ -1161,7 +1852,7 @@ function bindEvents() {
     state.saturationBoost = Number(e.target.value);
     document.getElementById('val-saturation').textContent = `${state.saturationBoost.toFixed(2)}×`;
     state.activeCodeLine = 3;
-    recomputeAndRender(state.breezeActive ? state.breezePhase : null);
+    recomputeAndRender(state.motionPlaying ? state.phase : null, state.bloomFactor);
     flashCodeStages(['hsv']);
   });
 
@@ -1169,21 +1860,23 @@ function bindEvents() {
     state.contrastBoost = Number(e.target.value);
     document.getElementById('val-contrast').textContent = `${state.contrastBoost.toFixed(2)}×`;
     state.activeCodeLine = 3;
-    recomputeAndRender(state.breezeActive ? state.breezePhase : null);
+    recomputeAndRender(state.motionPlaying ? state.phase : null, state.bloomFactor);
     flashCodeStages(['hsv']);
   });
 
   document.getElementById('select-ramp')?.addEventListener('change', e => {
     state.rampKey = e.target.value;
     state.activeCodeLine = 10;
-    recomputeAndRender(state.breezeActive ? state.breezePhase : null);
+    recomputeAndRender(state.motionPlaying ? state.phase : null, state.bloomFactor);
     flashCodeStages(['compose']);
   });
 
-  // Canvas pointer inspection (Sobel Cell Inspector)
+  // Canvas pointer inspection + interactive wind + curtain drag + shockwave click
   const canvas = document.getElementById('ascii-canvas');
   if (canvas) {
-    const inspectPointer = clientX => {
+    let lastNormX = null;
+
+    const inspectPointer = (pt, isDown = false) => {
       if (!state.gridData) return;
       const rect = canvas.getBoundingClientRect();
       const scaleX = canvas.offsetWidth / rect.width;
@@ -1192,8 +1885,29 @@ function bindEvents() {
       const padX = Number(canvas.dataset.padX || 10);
       const padY = Number(canvas.dataset.padY || 10);
 
-      const relX = (clientX.x - rect.left) * scaleX - padX;
-      const relY = (clientX.y - rect.top) * scaleX - padY;
+      const relX = (pt.x - rect.left) * scaleX - padX;
+      const relY = (pt.y - rect.top) * scaleX - padY;
+      const innerW = state.gridData.cols * charW;
+      const innerH = state.gridData.rows * charH;
+
+      const normX = Math.max(0, Math.min(1, relX / Math.max(1, innerW)));
+      const normY = Math.max(0, Math.min(1, relY / Math.max(1, innerH)));
+
+      if (state.isDraggingCurtain || (isDown && (state.curtainEnabled || state.choreography === 'curtain'))) {
+        state.curtainPos = Math.max(0.05, Math.min(0.95, normX));
+      }
+
+      if (lastNormX !== null) {
+        const deltaX = normX - lastNormX;
+        if (Math.abs(deltaX) > 0.002) {
+          state.pointerWind.active = true;
+          state.pointerWind.normX = normX;
+          state.pointerWind.normY = normY;
+          state.pointerWind.forceX = Math.max(-1.2, Math.min(1.2, deltaX * 18));
+        }
+      }
+      lastNormX = normX;
+
       const col = Math.floor(relX / charW);
       const row = Math.floor(relY / charH);
 
@@ -1201,21 +1915,50 @@ function bindEvents() {
         const cell = state.gridData.grid[row][col];
         state.hoveredCell = { col, row };
         updateHoverHud({ col, row, cell });
-        if (!state.breezeActive && !state.isRevealing) drawAsciiGridToCanvas();
+        if (!state.motionPlaying) drawAsciiGridToCanvas();
       }
     };
+
+    canvas.addEventListener('mousedown', e => {
+      if (state.curtainEnabled || state.choreography === 'curtain') {
+        state.isDraggingCurtain = true;
+      }
+      inspectPointer({ x: e.clientX, y: e.clientY }, true);
+      if (state.hoveredCell) {
+        triggerRadialShockwave(state.hoveredCell.col, state.hoveredCell.row);
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      state.isDraggingCurtain = false;
+    });
 
     canvas.addEventListener('mousemove', e => inspectPointer({ x: e.clientX, y: e.clientY }));
     canvas.addEventListener('mouseleave', () => {
       state.hoveredCell = null;
+      lastNormX = null;
       updateHoverHud(null);
-      if (!state.breezeActive && !state.isRevealing) drawAsciiGridToCanvas();
+      if (!state.motionPlaying) drawAsciiGridToCanvas();
     });
+
+    canvas.addEventListener(
+      'touchstart',
+      e => {
+        const t = e.touches[0];
+        if (!t) return;
+        inspectPointer({ x: t.clientX, y: t.clientY }, true);
+        if (state.hoveredCell) {
+          triggerRadialShockwave(state.hoveredCell.col, state.hoveredCell.row);
+        }
+      },
+      { passive: true }
+    );
+
     canvas.addEventListener(
       'touchmove',
       e => {
         const t = e.touches[0];
-        if (t) inspectPointer({ x: t.clientX, y: t.clientY });
+        if (t) inspectPointer({ x: t.clientX, y: t.clientY }, true);
       },
       { passive: true }
     );
@@ -1247,6 +1990,7 @@ function bindEvents() {
 }
 
 function init() {
+  initPollenParticles(28);
   buildShellHTML();
   renderKernelMatrices();
   renderLiveCodeDock(true);
