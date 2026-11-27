@@ -33,6 +33,24 @@ import numpy as np
 # Rampa de densidad luminosa (de oscuro a brillante)
 DENSITY_RAMP = " .:-=+*#%@"
 
+# Rampas disponibles (mismas claves y caracteres que CHAR_RAMPS en src/sobelEngine.js)
+CHAR_RAMPS = {
+    "classic": DENSITY_RAMP,
+    "highContrast": " .:+#@",
+    "botanical": " .·:;!i1tfLCG08@",
+    "blocks": " ░▒▓█",
+}
+
+# Tamaños de kernel válidos para cv2.Sobel: 3, 5 y -1 (cv2.FILTER_SCHARR)
+SOBEL_KSIZES = (3, 5, -1)
+
+# Parámetros compartidos del pipeline (deben coincidir con src/sobelEngine.js)
+BG_CUTOFF = 14
+CHAR_ASPECT = 0.5
+EDGE_ONLY_FACTOR = 0.72
+EDGE_COLOR_GAIN = 1.12
+EDGE_COLOR_OFFSET = 14
+
 # Fragmento de código que se muestra y resalta en vivo en el panel inferior
 LIVE_CODE_LINES = [
     ("import cv2, numpy as np", "setup"),
@@ -193,29 +211,61 @@ def map_sobel_angle_to_char(angle_deg: float) -> str:
     return "\\"
 
 
-def compute_sobel_ascii_frame(
-    img_bgr: np.ndarray,
-    width: int = 86,
+def parse_ksize(value: str | int) -> int:
+    """Convierte el argumento ksize ('3', '5', '-1' o 'scharr') al entero esperado por cv2.Sobel."""
+    if isinstance(value, int):
+        if value in SOBEL_KSIZES:
+            return value
+        raise argparse.ArgumentTypeError(f"ksize inválido: {value}. Usa 3, 5 o -1 (scharr).")
+    norm = value.strip().lower()
+    if norm in ("scharr", "filter_scharr", "-1"):
+        return -1
+    try:
+        parsed = int(norm)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"ksize inválido: {value}. Usa 3, 5, -1 o scharr.") from exc
+    if parsed not in SOBEL_KSIZES:
+        raise argparse.ArgumentTypeError(f"ksize inválido: {value}. Usa 3, 5, -1 o scharr.")
+    return parsed
+
+
+def resolve_ramp(ramp: str) -> str:
+    """Devuelve la cadena de caracteres de la rampa solicitada (por clave o literal)."""
+    if ramp in CHAR_RAMPS:
+        return CHAR_RAMPS[ramp]
+    if len(ramp) >= 2:
+        return ramp
+    return DENSITY_RAMP
+
+
+def resize_for_ascii(img_bgr: np.ndarray, width: int, char_aspect: float = CHAR_ASPECT) -> np.ndarray:
+    """Redimensiona con cv2.INTER_AREA a la rejilla ASCII (filas corregidas por el aspecto del carácter)."""
+    h, w = img_bgr.shape[:2]
+    rows = max(16, int((h / w) * width * char_aspect))
+    return cv2.resize(img_bgr, (width, rows), interpolation=cv2.INTER_AREA)
+
+
+def sobel_ascii_arrays_from_resized(
+    resized_bgr: np.ndarray,
     edge_threshold: float = 52.0,
     ksize: int = 3,
     saturation_boost: float = 1.35,
     contrast_boost: float = 1.15,
     mode: str = "combined",
-    char_aspect: float = 0.5,
-    bg_cutoff: int = 14,
-) -> Tuple[List[str], List[str], dict]:
+    ramp: str = DENSITY_RAMP,
+    bg_cutoff: int = BG_CUTOFF,
+) -> dict:
     """
-    Ejecuta el pipeline completo con `cv2.Sobel` y devuelve:
-      - ansi_lines: líneas coloreadas con secuencias ANSI TrueColor
-      - plain_lines: líneas en texto plano ASCII
-      - stats: métricas del pipeline (max_mag, edge_ratio, cols, rows)
+    Núcleo vectorizado con NumPy del pipeline `cv2.Sobel` sobre una imagen ya redimensionada.
+    Devuelve matrices (filas x columnas) listas para pintar, exportar o comparar con la versión web:
+      chars, edge_chars, rgb, gx, gy, mag, angle, lum, is_edge, active y stats.
     """
-    h, w = img_bgr.shape[:2]
-    rows = max(16, int((h / w) * width * char_aspect))
-    resized = cv2.resize(img_bgr, (width, rows), interpolation=cv2.INTER_AREA)
+    ksize = parse_ksize(ksize)
+    ramp_str = resolve_ramp(ramp)
+    rows, cols = resized_bgr.shape[:2]
 
     # Realce botánico de saturación y contraste en espacio HSV
-    hsv = cv2.cvtColor(resized, cv2.COLOR_BGR2HSV).astype(np.float32)
+    hsv = cv2.cvtColor(resized_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
     hsv[:, :, 1] = np.clip(hsv[:, :, 1] * saturation_boost, 0, 255)
     hsv[:, :, 2] = np.clip(hsv[:, :, 2] * contrast_boost, 0, 255)
     enhanced_bgr = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
@@ -224,10 +274,10 @@ def compute_sobel_ascii_frame(
     edge_rgb = cv2.dilate(rgb, np.ones((3, 3), dtype=np.uint8))
 
     # Conversión a escala de grises y suavizado ligero antes de cv2.Sobel
-    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(resized_bgr, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (3, 3), 0)
 
-    # Derivadas horizontales (Gx) y verticales (Gy) mediante cv2.Sobel
+    # Derivadas horizontales (Gx) y verticales (Gy) mediante cv2.Sobel (ksize=-1 -> Scharr)
     gx = cv2.Sobel(blurred, cv2.CV_64F, 1, 0, ksize=ksize)
     gy = cv2.Sobel(blurred, cv2.CV_64F, 0, 1, ksize=ksize)
 
@@ -235,70 +285,52 @@ def compute_sobel_ascii_frame(
     mag_raw = np.hypot(gx, gy)
     max_mag = float(mag_raw.max()) if mag_raw.size else 1.0
     mag = (mag_raw / (max_mag + 1e-6)) * 255.0
-    angles = (np.degrees(np.arctan2(gy, gx)) + 180.0) % 180.0
+    angle = (np.degrees(np.arctan2(gy, gx)) + 180.0) % 180.0
 
-    ansi_lines: List[str] = []
-    plain_lines: List[str] = []
-    edge_count = 0
-    active_count = 0
-    ramp_len = len(DENSITY_RAMP)
+    # Mapeo vectorial del ángulo al glifo tangente al borde
+    glyphs = np.select(
+        [angle < 22.5, angle < 67.5, angle < 112.5, angle < 157.5],
+        ["|", "/", "-", "\\"],
+        default="|",
+    )
 
-    for y in range(rows):
-        ansi_row: List[str] = []
-        plain_row: List[str] = []
-        for x in range(width):
-            lum = int(gray[y, x])
-            m = float(mag[y, x])
+    ramp_arr = np.array(list(ramp_str))
+    ramp_len = len(ramp_str)
+    lum = gray.astype(np.int32)
+    active = ~((lum < bg_cutoff) & (mag < edge_threshold))
 
-            if lum < bg_cutoff and m < edge_threshold:
-                ansi_row.append(" ")
-                plain_row.append(" ")
-                continue
+    edge_boost = np.minimum(255, (edge_rgb.astype(np.float64) * EDGE_COLOR_GAIN + EDGE_COLOR_OFFSET).astype(np.int32))
+    out_rgb = rgb.astype(np.int32)
 
-            active_count += 1
-            r, g, b = int(rgb[y, x, 0]), int(rgb[y, x, 1]), int(rgb[y, x, 2])
-            er, eg, eb = int(edge_rgb[y, x, 0]), int(edge_rgb[y, x, 1]), int(edge_rgb[y, x, 2])
+    if mode == "edges":
+        is_edge = active & (mag >= edge_threshold * EDGE_ONLY_FACTOR)
+        chars = np.where(is_edge, glyphs, " ")
+        out_rgb = np.where(is_edge[..., None], edge_boost, out_rgb)
+    elif mode == "magnitude":
+        idx = np.minimum(ramp_len - 1, (mag / 255.0 * (ramp_len - 1)).astype(np.int32))
+        chars = ramp_arr[idx]
+        is_edge = active & (mag >= edge_threshold)
+        # Mapa térmico naranja-dorado-azul según magnitud Sobel
+        norm_m = mag / 255.0
+        heat_r = np.minimum(255, (255 * norm_m * 1.25).astype(np.int32))
+        heat_g = np.minimum(255, (190 * (norm_m ** 1.3)).astype(np.int32))
+        heat_b = np.where(norm_m > 0.08, np.minimum(255, (95 + 160 * (1.0 - norm_m)).astype(np.int32)), 0)
+        out_rgb = np.stack([heat_r, heat_g, heat_b], axis=-1)
+    else:
+        # Modo "combined": bordes direccionales cv2.Sobel + relleno luminoso
+        is_edge = active & (mag >= edge_threshold)
+        idx = np.minimum(ramp_len - 1, np.maximum(1, (lum / 255.0 * (ramp_len - 1)).astype(np.int32)))
+        chars = np.where(is_edge, glyphs, ramp_arr[idx])
+        out_rgb = np.where(is_edge[..., None], edge_boost, out_rgb)
 
-            if mode == "edges":
-                if m >= edge_threshold * 0.72:
-                    ch = map_sobel_angle_to_char(float(angles[y, x]))
-                    edge_count += 1
-                    r, g, b = er, eg, eb
-                else:
-                    ch = " "
-            elif mode == "magnitude":
-                idx = min(ramp_len - 1, int((m / 255.0) * (ramp_len - 1)))
-                ch = DENSITY_RAMP[idx]
-                if m >= edge_threshold:
-                    edge_count += 1
-                # Mapa térmico naranja-dorado-azul según magnitud Sobel
-                norm_m = m / 255.0
-                r = int(min(255, 255 * norm_m * 1.25))
-                g = int(min(255, 190 * (norm_m ** 1.3)))
-                b = int(min(255, 95 + 160 * (1.0 - norm_m))) if norm_m > 0.08 else 0
-            else:
-                # Modo "combined": bordes direccionales cv2.Sobel + relleno luminoso
-                if m >= edge_threshold:
-                    ch = map_sobel_angle_to_char(float(angles[y, x]))
-                    edge_count += 1
-                    r = min(255, int(er * 1.12 + 14))
-                    g = min(255, int(eg * 1.12 + 14))
-                    b = min(255, int(eb * 1.12 + 14))
-                else:
-                    idx = min(ramp_len - 1, max(1, int((lum / 255.0) * (ramp_len - 1))))
-                    ch = DENSITY_RAMP[idx]
+    chars = np.where(active, chars, " ")
+    out_rgb = np.where(active[..., None], out_rgb, 0).astype(np.uint8)
+    edge_chars = np.where(active & (mag >= edge_threshold * 0.65), glyphs, " ")
 
-            plain_row.append(ch)
-            if ch == " ":
-                ansi_row.append(" ")
-            else:
-                ansi_row.append(f"\033[38;2;{r};{g};{b}m{ch}\033[0m")
-
-        ansi_lines.append("".join(ansi_row))
-        plain_lines.append("".join(plain_row))
-
+    edge_count = int(is_edge.sum())
+    active_count = int(active.sum())
     stats = {
-        "cols": width,
+        "cols": cols,
         "rows": rows,
         "max_mag": round(max_mag, 1),
         "edge_cells": edge_count,
@@ -307,7 +339,94 @@ def compute_sobel_ascii_frame(
         "ksize": ksize,
         "threshold": edge_threshold,
     }
-    return ansi_lines, plain_lines, stats
+    return {
+        "chars": chars,
+        "edge_chars": edge_chars,
+        "rgb": out_rgb,
+        "gx": gx,
+        "gy": gy,
+        "mag": mag,
+        "angle": angle,
+        "lum": lum,
+        "is_edge": is_edge,
+        "active": active,
+        "stats": stats,
+    }
+
+
+def compute_sobel_ascii_arrays(
+    img_bgr: np.ndarray,
+    width: int = 86,
+    edge_threshold: float = 52.0,
+    ksize: int = 3,
+    saturation_boost: float = 1.35,
+    contrast_boost: float = 1.15,
+    mode: str = "combined",
+    ramp: str = DENSITY_RAMP,
+    char_aspect: float = CHAR_ASPECT,
+    bg_cutoff: int = BG_CUTOFF,
+) -> dict:
+    """Redimensiona (cv2.INTER_AREA) y ejecuta el núcleo vectorizado. Usado también desde Pyodide en la web."""
+    resized = resize_for_ascii(img_bgr, width, char_aspect)
+    return sobel_ascii_arrays_from_resized(
+        resized,
+        edge_threshold=edge_threshold,
+        ksize=ksize,
+        saturation_boost=saturation_boost,
+        contrast_boost=contrast_boost,
+        mode=mode,
+        ramp=ramp,
+        bg_cutoff=bg_cutoff,
+    )
+
+
+def arrays_to_lines(chars: np.ndarray, rgb: np.ndarray) -> Tuple[List[str], List[str]]:
+    """Convierte las matrices de glifos y color en líneas ANSI TrueColor y texto plano."""
+    ansi_lines: List[str] = []
+    plain_lines: List[str] = []
+    for char_row, rgb_row in zip(chars.tolist(), rgb.tolist()):
+        plain_lines.append("".join(char_row))
+        ansi_lines.append(
+            "".join(
+                " " if ch == " " else f"\033[38;2;{r};{g};{b}m{ch}\033[0m"
+                for ch, (r, g, b) in zip(char_row, rgb_row)
+            )
+        )
+    return ansi_lines, plain_lines
+
+
+def compute_sobel_ascii_frame(
+    img_bgr: np.ndarray,
+    width: int = 86,
+    edge_threshold: float = 52.0,
+    ksize: int = 3,
+    saturation_boost: float = 1.35,
+    contrast_boost: float = 1.15,
+    mode: str = "combined",
+    char_aspect: float = CHAR_ASPECT,
+    bg_cutoff: int = BG_CUTOFF,
+    ramp: str = DENSITY_RAMP,
+) -> Tuple[List[str], List[str], dict]:
+    """
+    Ejecuta el pipeline completo con `cv2.Sobel` y devuelve:
+      - ansi_lines: líneas coloreadas con secuencias ANSI TrueColor
+      - plain_lines: líneas en texto plano ASCII
+      - stats: métricas del pipeline (max_mag, edge_ratio, cols, rows)
+    """
+    arrays = compute_sobel_ascii_arrays(
+        img_bgr,
+        width=width,
+        edge_threshold=edge_threshold,
+        ksize=ksize,
+        saturation_boost=saturation_boost,
+        contrast_boost=contrast_boost,
+        mode=mode,
+        ramp=ramp,
+        char_aspect=char_aspect,
+        bg_cutoff=bg_cutoff,
+    )
+    ansi_lines, plain_lines = arrays_to_lines(arrays["chars"], arrays["rgb"])
+    return ansi_lines, plain_lines, arrays["stats"]
 
 
 def format_live_code_panel(
@@ -384,6 +503,8 @@ def run_progressive_scan_animation(
     edge_threshold: float,
     ksize: int,
     saturation: float,
+    contrast: float,
+    ramp: str,
     mode: str,
     show_code: bool,
     fps: int,
@@ -401,7 +522,9 @@ def run_progressive_scan_animation(
         edge_threshold=edge_threshold,
         ksize=ksize,
         saturation_boost=saturation,
+        contrast_boost=contrast,
         mode=mode,
+        ramp=ramp,
     )
     edges_only_ansi, _, _ = compute_sobel_ascii_frame(
         img_bgr,
@@ -409,7 +532,9 @@ def run_progressive_scan_animation(
         edge_threshold=edge_threshold * 0.85,
         ksize=ksize,
         saturation_boost=saturation,
+        contrast_boost=contrast,
         mode="edges",
+        ramp=ramp,
     )
 
     total_rows = len(ansi_lines)
@@ -452,7 +577,9 @@ def run_progressive_scan_animation(
                     edge_threshold=edge_threshold,
                     ksize=ksize,
                     saturation_boost=saturation,
+                    contrast_boost=contrast,
                     mode=mode,
+                    ramp=ramp,
                 )
                 active_code_idx = len(LIVE_CODE_LINES) - 1
                 char_prog = 1.0
@@ -483,8 +610,22 @@ def main() -> None:
     parser.add_argument("--image", "-i", type=str, default=None, help="Ruta a una imagen personalizada")
     parser.add_argument("--width", "-w", type=int, default=0, help="Ancho en columnas ASCII (0 = auto según terminal)")
     parser.add_argument("--threshold", "-t", type=float, default=52.0, help="Umbral de borde cv2.Sobel (10-180)")
-    parser.add_argument("--ksize", "-k", type=int, choices=[3, 5], default=3, help="Tamaño del kernel cv2.Sobel (3 o 5)")
+    parser.add_argument(
+        "--ksize",
+        "-k",
+        type=parse_ksize,
+        default=3,
+        help="Tamaño del kernel cv2.Sobel: 3, 5 o -1 / scharr (cv2.FILTER_SCHARR)",
+    )
     parser.add_argument("--saturation", "-s", type=float, default=1.35, help="Multiplicador de saturación HSV")
+    parser.add_argument("--contrast", "-c", type=float, default=1.15, help="Multiplicador de contraste/brillo V")
+    parser.add_argument(
+        "--ramp",
+        "-r",
+        choices=list(CHAR_RAMPS.keys()),
+        default="classic",
+        help="Rampa de densidad ASCII (classic, highContrast, botanical, blocks)",
+    )
     parser.add_argument(
         "--mode",
         "-m",
@@ -500,6 +641,7 @@ def main() -> None:
     parser.add_argument("--save-ans", type=str, default=None, help="Guardar arte ASCII con color ANSI en un archivo .ans")
 
     args = parser.parse_args()
+    ramp_str = resolve_ramp(args.ramp)
 
     term_cols, term_rows = shutil.get_terminal_size((96, 46))
     if args.width > 0:
@@ -518,7 +660,9 @@ def main() -> None:
             edge_threshold=args.threshold,
             ksize=args.ksize,
             saturation_boost=args.saturation,
+            contrast_boost=args.contrast,
             mode=args.mode,
+            ramp=ramp_str,
         )
         if args.save_txt:
             Path(args.save_txt).write_text("\n".join(plain_lines) + "\n", encoding="utf-8")
@@ -542,6 +686,8 @@ def main() -> None:
         edge_threshold=args.threshold,
         ksize=args.ksize,
         saturation=args.saturation,
+        contrast=args.contrast,
+        ramp=ramp_str,
         mode=args.mode,
         show_code=not args.no_code,
         fps=args.fps,

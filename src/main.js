@@ -1,3 +1,5 @@
+import { exportVerticalGif, exportVerticalWebm } from './exporter.js';
+import { computeSobelGridWithPyodide, isPyodideReady } from './pyodideRunner.js';
 import {
   CHAR_RAMPS,
   KERNEL_PRESETS,
@@ -7,6 +9,7 @@ import {
   gridToPlainText,
   renderProceduralStrelitziaToCanvas
 } from './sobelEngine.js';
+import { renderVmDashboard } from './vmDashboard.js';
 
 const state = {
   sourceType: 'photo', // 'photo' | 'procedural' | 'upload'
@@ -31,24 +34,40 @@ const state = {
 
   // Live code dock state
   activeCodeLine: 11, // 0..11
-  flashedLines: new Set(),
+  flashedStages: new Set(),
+
+  // Pyodide WebAssembly state
+  pyodideBusy: false,
+  lastPyodideMs: null,
+
+  // Export state
+  exportBusy: false,
 
   // Hover cell inspector
   hoveredCell: null,
 
   // Cached source canvas & computed grid
   sourceCanvas: null,
+  sourceVersion: 0,
   gridData: null
 };
 
 let animFrameId = null;
 let revealStartTime = 0;
+let lastCodeDockSig = '';
+let proceduralRawCanvas = null;
+let proceduralCroppedCanvas = null;
 const REVEAL_DURATION_MS = 3800;
+
+function prefersReducedMotion() {
+  return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+}
 
 function buildShellHTML() {
   const app = document.getElementById('app');
   app.innerHTML = `
-    <div class="studio-shell">
+    <div id="vm-dashboard-view" hidden></div>
+    <div class="studio-shell" id="studio-view">
       <header class="studio-header">
         <div class="brand-group">
           <div class="brand-emblem" aria-hidden="true">/|\\</div>
@@ -73,6 +92,12 @@ function buildShellHTML() {
           <button type="button" class="btn btn-vertical" id="btn-toggle-framing">
             📱 Vista Vertical 9:16
           </button>
+          <button type="button" class="btn" id="btn-export-webm" title="Grabar animación en video WebM 9:16">
+            🎥 Exportar WebM
+          </button>
+          <button type="button" class="btn" id="btn-export-gif" title="Exportar animación en GIF 9:16">
+            🎞️ Exportar GIF
+          </button>
           <button type="button" class="btn" id="btn-copy-ascii">
             📋 Copiar ASCII
           </button>
@@ -83,6 +108,9 @@ function buildShellHTML() {
             download="ave_del_paraiso_sobel.py"
           >
             🐍 Descargar .py
+          </a>
+          <a class="btn btn-vm-lab" id="btn-open-vm-lab" href="#/vm-lab" title="Abrir el panel original Remote VM Lab">
+            🖥️ VM Lab
           </a>
         </div>
       </header>
@@ -95,7 +123,7 @@ function buildShellHTML() {
               <span class="win-dot crimson"></span>
               <span class="win-dot gold"></span>
               <span class="win-dot emerald"></span>
-              <span class="terminal-title" id="terminal-dim-label">python3 ave_del_paraiso_sobel.py — 88×54</span>
+              <span class="terminal-title" id="terminal-dim-label">python3 ave_del_paraiso_sobel.py — 88×53</span>
             </div>
 
             <div class="view-mode-tabs" role="tablist">
@@ -116,7 +144,13 @@ function buildShellHTML() {
 
           <!-- UPPER VIEWPORT: ASCII Art Canvas + Reference PiP -->
           <div class="ascii-viewport-wrapper" id="ascii-viewport-wrapper">
-            <canvas class="ascii-canvas" id="ascii-canvas"></canvas>
+            <canvas
+              class="ascii-canvas"
+              id="ascii-canvas"
+              role="img"
+              aria-label="Arte ASCII direccional de la flor Ave del Paraíso generado con cv2.Sobel"
+            ></canvas>
+            <div class="sr-only" id="ascii-sr-summary" aria-live="polite"></div>
             <pre class="ascii-pre-selectable" id="ascii-pre" hidden></pre>
 
             <div class="reference-pip" id="reference-pip" title="Haz clic para ampliar/reducir la referencia original">
@@ -124,7 +158,7 @@ function buildShellHTML() {
                 <span>Ref. Original</span>
                 <span id="pip-toggle-label">🔍</span>
               </div>
-              <canvas id="pip-canvas"></canvas>
+              <canvas id="pip-canvas" aria-label="Miniatura de la imagen de referencia original"></canvas>
             </div>
           </div>
 
@@ -134,6 +168,9 @@ function buildShellHTML() {
               <span class="hud-pill">Pasa el cursor o toca la flor para inspeccionar <strong>Gx, Gy, |G| y θ°</strong> de cada celda ASCII</span>
             </div>
             <div class="hud-metrics">
+              <span class="hud-pill" id="pyodide-runtime-pill" hidden>
+                WASM cv2.Sobel: <strong id="stat-pyodide-ms">-- ms</strong>
+              </span>
               <span class="hud-pill">Bordes Sobel: <strong id="stat-edge-ratio">--%</strong></span>
               <span class="hud-pill">Celdas activas: <strong id="stat-active-cells">--</strong></span>
             </div>
@@ -148,6 +185,14 @@ function buildShellHTML() {
               </div>
               <div class="header-actions">
                 <span class="code-dock-subtitle">Haz clic en cualquier línea para inspeccionar su etapa</span>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-pyodide"
+                  id="btn-run-pyodide"
+                  title="Ejecuta el script real con OpenCV (cv2.Sobel) compilado a WebAssembly mediante Pyodide"
+                >
+                  🐍 Ejecutar Python Real (Pyodide)
+                </button>
                 <button type="button" class="btn btn-sm" id="btn-copy-python">
                   📋 Copiar Script Python
                 </button>
@@ -216,7 +261,7 @@ function buildShellHTML() {
                 </div>
                 <select class="select-input" id="select-kernel">
                   <option value="3">cv2.Sobel (ksize=3) — Estándar 3×3</option>
-                  <option value="5">cv2.Sobel (ksize=5) — Suavizado 5×5</option>
+                  <option value="5">cv2.Sobel (ksize=5) — Suavizado 5×5 Real</option>
                   <option value="scharr">cv2.Sobel (ksize=-1) — Filtro Scharr</option>
                 </select>
               </div>
@@ -289,30 +334,33 @@ function buildShellHTML() {
 }
 
 let toastTimer = null;
-function showToast(message) {
+function showToast(message, durationMs = 2600) {
   const el = document.getElementById('toast-msg');
   if (!el) return;
   el.textContent = message;
   el.classList.add('visible');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('visible'), 2600);
+  if (durationMs > 0) {
+    toastTimer = setTimeout(() => el.classList.remove('visible'), durationMs);
+  }
 }
 
 function renderKernelMatrices() {
   const container = document.getElementById('kernels-matrix-view');
   const tag = document.getElementById('kernel-tag-label');
   const preset = KERNEL_PRESETS[state.kernelKey] || KERNEL_PRESETS['3'];
-  if (tag) tag.textContent = preset.pyArg;
+  const dim = preset.size || preset.gx.length;
+  if (tag) tag.textContent = `${preset.pyArg} (${dim}×${dim})`;
 
   const formatMatrix = (mat, title) => `
     <div class="kernel-box">
-      <div class="kernel-title"><span>${title}</span><span>3×3</span></div>
-      <div class="matrix-3x3">
+      <div class="kernel-title"><span>${title}</span><span>${dim}×${dim}</span></div>
+      <div class="matrix-grid matrix-${dim}x${dim}" style="grid-template-columns: repeat(${dim}, 1fr);">
         ${mat
           .flat()
           .map(v => {
             const cls = v < 0 ? 'neg' : v > 0 ? 'pos' : '';
-            return `<div class="matrix-cell ${cls}">${v > 0 ? `+${v}` : v}</div>`;
+            return `<div class="matrix-cell ${dim === 5 ? 'cell-5x5' : ''} ${cls}">${v > 0 ? `+${v}` : v}</div>`;
           })
           .join('')}
       </div>
@@ -335,23 +383,27 @@ function getLivePythonLines() {
   return [
     {
       num: '01',
+      stage: 'import',
       badge: 'import',
       html: `<span class="tok-kw">import</span> cv2, numpy <span class="tok-kw">as</span> np, sys`
     },
     {
       num: '02',
+      stage: 'input',
       badge: 'input',
       html: `img = cv2.<span class="tok-fn">imread</span>(<span class="tok-str">${imgName}</span>)  <span class="tok-cmt"># Strelitzia reginae</span>`
     },
     {
       num: '03',
+      stage: 'resize',
       badge: 'resize',
       html: `resized = cv2.<span class="tok-fn">resize</span>(img, (<span class="tok-live-val">${state.cols}</span>, <span class="tok-num">${
-        state.gridData ? state.gridData.rows : 54
+        state.gridData ? state.gridData.rows : 53
       }</span>), interpolation=cv2.INTER_AREA)`
     },
     {
       num: '04',
+      stage: 'hsv',
       badge: 'hsv',
       html: `hsv = cv2.<span class="tok-fn">cvtColor</span>(resized, cv2.COLOR_BGR2HSV) * [<span class="tok-num">1</span>, <span class="tok-live-val">${state.saturationBoost.toFixed(
         2
@@ -359,63 +411,92 @@ function getLivePythonLines() {
     },
     {
       num: '05',
+      stage: 'blur',
       badge: 'blur',
       html: `gray = cv2.<span class="tok-fn">GaussianBlur</span>(cv2.<span class="tok-fn">cvtColor</span>(resized, cv2.COLOR_BGR2GRAY), (<span class="tok-num">3</span>, <span class="tok-num">3</span>), <span class="tok-num">0</span>)`
     },
     {
       num: '06',
+      stage: 'sobel_x',
       badge: 'Sobel Gx',
       html: `gx = cv2.<span class="tok-fn">Sobel</span>(gray, cv2.CV_64F, <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-live-val">${preset.pyArg}</span>)  <span class="tok-cmt"># ∂I/∂x</span>`
     },
     {
       num: '07',
+      stage: 'sobel_y',
       badge: 'Sobel Gy',
       html: `gy = cv2.<span class="tok-fn">Sobel</span>(gray, cv2.CV_64F, <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-live-val">${preset.pyArg}</span>)  <span class="tok-cmt"># ∂I/∂y</span>`
     },
     {
       num: '08',
+      stage: 'mag',
       badge: 'magnitud',
       html: `mag = np.<span class="tok-fn">hypot</span>(gx, gy) / np.<span class="tok-fn">hypot</span>(gx, gy).<span class="tok-fn">max</span>() * <span class="tok-num">255.0</span>`
     },
     {
       num: '09',
+      stage: 'angle',
       badge: 'ángulo θ',
       html: `angle = (np.<span class="tok-fn">degrees</span>(np.<span class="tok-fn">arctan2</span>(gy, gx)) + <span class="tok-num">180.0</span>) % <span class="tok-num">180.0</span>`
     },
     {
       num: '10',
+      stage: 'map_edge',
       badge: 'vectores',
       html: `edge_ch = np.<span class="tok-fn">select</span>([angle&lt;<span class="tok-num">22.5</span>, angle&lt;<span class="tok-num">67.5</span>, angle&lt;<span class="tok-num">112.5</span>, angle&lt;<span class="tok-num">157.5</span>], [<span class="tok-str">'|'</span>,<span class="tok-str">'/'</span>,<span class="tok-str">'-'</span>,<span class="tok-str">'\\\\'</span>], <span class="tok-str">'|'</span>)`
     },
     {
       num: '11',
+      stage: 'compose',
       badge: 'umbral',
       html: `glyph = np.<span class="tok-fn">where</span>(mag &gt;= <span class="tok-live-val">${state.edgeThreshold}</span>, edge_ch, <span class="tok-str">"${rampStr}"</span>[lum_idx])`
     },
     {
       num: '12',
+      stage: 'render',
       badge: 'ANSI 24b',
       html: `sys.stdout.<span class="tok-fn">write</span>(<span class="tok-str">f"\\033[38;2;{r};{g};{b}m{glyph}\\033[0m"</span>)  <span class="tok-cmt"># modo=${state.viewMode}</span>`
     }
   ];
 }
 
-function renderLiveCodeDock() {
+function buildCliCommandText() {
+  const kFlag =
+    state.kernelKey === '5'
+      ? ' --ksize 5'
+      : state.kernelKey === 'scharr'
+      ? ' --ksize -1'
+      : '';
+  const cFlag = Math.abs(state.contrastBoost - 1.15) > 0.005 ? ` --contrast ${state.contrastBoost}` : '';
+  const rFlag = state.rampKey !== 'classic' ? ` --ramp ${state.rampKey}` : '';
+  const mFlag = state.viewMode !== 'combined' ? ` --mode ${state.viewMode}` : '';
+  return `--width ${state.cols} --threshold ${state.edgeThreshold}${kFlag} --saturation ${state.saturationBoost}${cFlag}${rFlag}${mFlag}`;
+}
+
+function renderLiveCodeDock(force = false) {
   const container = document.getElementById('live-code-lines');
   if (!container) return;
+
+  const rows = state.gridData ? state.gridData.rows : 53;
+  const flashedKey = Array.from(state.flashedStages).sort().join(',');
+  const sig = `${state.sourceType}|${state.cols}x${rows}|${state.edgeThreshold}|${state.kernelKey}|${state.saturationBoost}|${state.contrastBoost}|${state.rampKey}|${state.viewMode}|${state.activeCodeLine}|${state.isRevealing}|${flashedKey}`;
+
+  if (!force && sig === lastCodeDockSig) return;
+  lastCodeDockSig = sig;
 
   const lines = getLivePythonLines();
   container.innerHTML = lines
     .map((line, idx) => {
       const isActive = idx === state.activeCodeLine;
-      const isFlashed = state.flashedLines.has(idx);
+      const isFlashed = state.flashedStages.has(line.stage);
       const cursorHtml = isActive && state.isRevealing ? '<span class="typewriter-cursor"></span>' : '';
       return `
         <div
           class="code-line ${isActive ? 'active-step' : ''} ${isFlashed ? 'param-flash' : ''}"
           data-code-idx="${idx}"
+          data-stage="${line.stage}"
         >
-          <span class="line-num">${ isActive ? '▶ ' : '' }${line.num}</span>
+          <span class="line-num">${isActive ? '▶ ' : ''}${line.num}</span>
           <span class="line-content">${line.html}${cursorHtml}</span>
           <span class="line-badge">${line.badge}</span>
         </div>
@@ -423,37 +504,18 @@ function renderLiveCodeDock() {
     })
     .join('');
 
-  // Bind click on code lines to inspect pipeline stages
-  container.querySelectorAll('[data-code-idx]').forEach(rowEl => {
-    rowEl.addEventListener('click', () => {
-      const idx = Number(rowEl.getAttribute('data-code-idx'));
-      state.activeCodeLine = idx;
-      if (idx === 5 || idx === 6 || idx === 9) {
-        setViewMode('edges');
-      } else if (idx === 7) {
-        setViewMode('magnitude');
-      } else if (idx >= 10) {
-        setViewMode('combined');
-      }
-      renderLiveCodeDock();
-    });
-  });
-
-  // Update CLI command bar
-  const kFlag = state.kernelKey === '5' ? ' --ksize 5' : '';
-  const mFlag = state.viewMode !== 'combined' ? ` --mode ${state.viewMode}` : '';
   const cliEl = document.getElementById('live-cli-command');
   if (cliEl) {
-    cliEl.innerHTML = `$ python3 ave_del_paraiso_sobel.py <span>--width ${state.cols} --threshold ${state.edgeThreshold}${kFlag} --saturation ${state.saturationBoost}${mFlag}</span>`;
+    cliEl.innerHTML = `$ python3 ave_del_paraiso_sobel.py <span>${buildCliCommandText()}</span>`;
   }
 }
 
-function flashCodeLines(lineIndices) {
-  lineIndices.forEach(i => state.flashedLines.add(i));
-  renderLiveCodeDock();
+function flashCodeStages(stages) {
+  stages.forEach(s => state.flashedStages.add(s));
+  renderLiveCodeDock(true);
   setTimeout(() => {
-    lineIndices.forEach(i => state.flashedLines.delete(i));
-    renderLiveCodeDock();
+    stages.forEach(s => state.flashedStages.delete(s));
+    renderLiveCodeDock(true);
   }, 420);
 }
 
@@ -464,16 +526,23 @@ function drawAsciiGridToCanvas() {
   const canvas = document.getElementById('ascii-canvas');
   if (!canvas) return;
 
+  const wrapper = document.getElementById('ascii-viewport-wrapper');
+  const availW = wrapper && wrapper.clientWidth > 120 ? wrapper.clientWidth - 28 : 960;
+
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  // Compute ideal character cell pixel size so canvas fits crisply
-  const baseCharW = cols > 110 ? 7.2 : cols > 85 ? 8.6 : 10.2;
+  // Ajustar celda para que quepa en pantallas móviles sin desbordar horizontalmente
+  const defaultCharW = cols > 110 ? 7.2 : cols > 85 ? 8.6 : 10.2;
+  const maxFitCharW = Math.max(3.8, (availW - 20) / cols);
+  const baseCharW = Math.min(defaultCharW, maxFitCharW);
   const baseCharH = baseCharW * 1.92;
 
   const logicalW = Math.ceil(cols * baseCharW + 20);
   const logicalH = Math.ceil(rows * baseCharH + 20);
 
-  canvas.width = Math.round(logicalW * dpr);
-  canvas.height = Math.round(logicalH * dpr);
+  const targetW = Math.round(logicalW * dpr);
+  const targetH = Math.round(logicalH * dpr);
+  if (canvas.width !== targetW) canvas.width = targetW;
+  if (canvas.height !== targetH) canvas.height = targetH;
   canvas.style.width = `${logicalW}px`;
   canvas.style.height = `${logicalH}px`;
 
@@ -485,7 +554,7 @@ function drawAsciiGridToCanvas() {
   ctx.fillStyle = '#04060a';
   ctx.fillRect(0, 0, logicalW, logicalH);
 
-  ctx.font = `600 ${Math.round(baseCharH * 0.82)}px "JetBrains Mono", ui-monospace, monospace`;
+  ctx.font = `600 ${Math.max(6, Math.round(baseCharH * 0.82))}px "JetBrains Mono", ui-monospace, monospace`;
   ctx.textBaseline = 'top';
 
   const padX = 10;
@@ -528,15 +597,18 @@ function drawAsciiGridToCanvas() {
     ctx.fillRect(0, scanY - 1, logicalW, 2.5);
   }
 
-  // Draw 3x3 Sobel kernel inspection reticle if user is hovering a cell
+  // Draw Sobel kernel inspection reticle if user is hovering a cell
   if (state.hoveredCell) {
     const { col, row } = state.hoveredCell;
+    const preset = KERNEL_PRESETS[state.kernelKey] || KERNEL_PRESETS['3'];
+    const kDim = preset.size || 3;
+    const kHalf = (kDim - 1) >> 1;
     if (col >= 0 && col < cols && row >= 0 && row < rows) {
-      const rx = padX + (col - 1) * baseCharW - 1;
-      const ry = padY + (row - 1) * baseCharH - 1;
+      const rx = padX + (col - kHalf) * baseCharW - 1;
+      const ry = padY + (row - kHalf) * baseCharH - 1;
       ctx.strokeStyle = 'rgba(250, 204, 46, 0.85)';
       ctx.lineWidth = 1.3;
-      ctx.strokeRect(rx, ry, baseCharW * 3 + 2, baseCharH * 3 + 2);
+      ctx.strokeRect(rx, ry, baseCharW * kDim + 2, baseCharH * kDim + 2);
     }
   }
 
@@ -579,6 +651,13 @@ function updateStatsAndHud() {
 
   const activeEl = document.getElementById('stat-active-cells');
   if (activeEl) activeEl.textContent = String(stats.activeCount);
+
+  const preset = KERNEL_PRESETS[state.kernelKey] || KERNEL_PRESETS['3'];
+  const summaryText = `Flor Ave del Paraíso en arte ASCII (${cols} columnas por ${rows} filas), operador ${preset.label}, ${stats.activeCount} celdas activas y ${stats.edgeRatio}% de bordes direccionales.`;
+  const canvas = document.getElementById('ascii-canvas');
+  if (canvas) canvas.setAttribute('aria-label', summaryText);
+  const srEl = document.getElementById('ascii-sr-summary');
+  if (srEl && !state.breezeActive) srEl.textContent = summaryText;
 }
 
 function updateHoverHud(cellInfo) {
@@ -610,17 +689,18 @@ function updateHoverHud(cellInfo) {
   `;
 }
 
-function recomputeAndRender(breezePhaseOverride = null) {
-  if (!state.sourceCanvas) return;
+function computeFrameForPhase(breezePhaseOverride = null) {
+  if (!state.sourceCanvas) return null;
 
+  let canvasToSample = state.sourceCanvas;
   if (state.sourceType === 'procedural' && breezePhaseOverride !== null) {
-    const rawProc = document.createElement('canvas');
-    renderProceduralStrelitziaToCanvas(rawProc, breezePhaseOverride);
-    state.sourceCanvas = extractCroppedImageCanvas(rawProc);
-    renderPipPreview();
+    if (!proceduralRawCanvas) proceduralRawCanvas = document.createElement('canvas');
+    if (!proceduralCroppedCanvas) proceduralCroppedCanvas = document.createElement('canvas');
+    renderProceduralStrelitziaToCanvas(proceduralRawCanvas, breezePhaseOverride);
+    canvasToSample = extractCroppedImageCanvas(proceduralRawCanvas, proceduralCroppedCanvas);
   }
 
-  state.gridData = computeSobelAsciiGrid(state.sourceCanvas, {
+  return computeSobelAsciiGrid(canvasToSample, {
     cols: state.cols,
     edgeThreshold: state.edgeThreshold,
     kernelKey: state.kernelKey,
@@ -628,8 +708,24 @@ function recomputeAndRender(breezePhaseOverride = null) {
     contrastBoost: state.contrastBoost,
     rampKey: state.rampKey,
     viewMode: state.viewMode,
-    breezePhase: state.sourceType !== 'procedural' ? breezePhaseOverride : null
+    breezePhase: state.sourceType !== 'procedural' ? breezePhaseOverride : null,
+    sourceVersion: state.sourceVersion
   });
+}
+
+function recomputeAndRender(breezePhaseOverride = null) {
+  if (!state.sourceCanvas) return;
+
+  if (state.sourceType === 'procedural' && breezePhaseOverride !== null) {
+    if (!proceduralRawCanvas) proceduralRawCanvas = document.createElement('canvas');
+    if (!proceduralCroppedCanvas) proceduralCroppedCanvas = document.createElement('canvas');
+    renderProceduralStrelitziaToCanvas(proceduralRawCanvas, breezePhaseOverride);
+    state.sourceCanvas = extractCroppedImageCanvas(proceduralRawCanvas, proceduralCroppedCanvas);
+    state.sourceVersion++;
+    renderPipPreview();
+  }
+
+  state.gridData = computeFrameForPhase(breezePhaseOverride);
 
   updateStatsAndHud();
   if (state.renderTarget === 'canvas') {
@@ -643,8 +739,8 @@ function recomputeAndRender(breezePhaseOverride = null) {
 function renderPipPreview() {
   const pipCanvas = document.getElementById('pip-canvas');
   if (!pipCanvas || !state.sourceCanvas) return;
-  pipCanvas.width = state.sourceCanvas.width;
-  pipCanvas.height = state.sourceCanvas.height;
+  if (pipCanvas.width !== state.sourceCanvas.width) pipCanvas.width = state.sourceCanvas.width;
+  if (pipCanvas.height !== state.sourceCanvas.height) pipCanvas.height = state.sourceCanvas.height;
   pipCanvas.getContext('2d').drawImage(state.sourceCanvas, 0, 0);
 }
 
@@ -730,36 +826,38 @@ function toggleSelectableMode(forcePre) {
   }
 }
 
-function loadPhotoPreset() {
+function loadPhotoPreset(autoAnimate = !prefersReducedMotion()) {
   const img = new Image();
   img.crossOrigin = 'anonymous';
   img.onload = () => {
     state.sourceType = 'photo';
     state.sourceCanvas = extractCroppedImageCanvas(img);
+    state.sourceVersion++;
     renderPipPreview();
     recomputeAndRender();
-    triggerStepByStepScan();
+    if (autoAnimate) triggerStepByStepScan();
   };
   img.onerror = () => {
-    loadProceduralPreset();
+    loadProceduralPreset(autoAnimate);
   };
   img.src = './ave-del-paraiso.jpg';
 }
 
-function loadProceduralPreset() {
+function loadProceduralPreset(autoAnimate = !prefersReducedMotion()) {
   state.sourceType = 'procedural';
-  const rawCanvas = document.createElement('canvas');
-  renderProceduralStrelitziaToCanvas(rawCanvas, 0);
-  state.sourceCanvas = extractCroppedImageCanvas(rawCanvas);
+  if (!proceduralRawCanvas) proceduralRawCanvas = document.createElement('canvas');
+  if (!proceduralCroppedCanvas) proceduralCroppedCanvas = document.createElement('canvas');
+  renderProceduralStrelitziaToCanvas(proceduralRawCanvas, 0);
+  state.sourceCanvas = extractCroppedImageCanvas(proceduralRawCanvas, proceduralCroppedCanvas);
+  state.sourceVersion++;
   renderPipPreview();
   recomputeAndRender();
-  triggerStepByStepScan();
+  if (autoAnimate) triggerStepByStepScan();
 }
 
 function getFullStandalonePythonCode() {
   const preset = KERNEL_PRESETS[state.kernelKey] || KERNEL_PRESETS['3'];
   const rampStr = (CHAR_RAMPS[state.rampKey] || CHAR_RAMPS.classic).ramp;
-  const ksizeVal = state.kernelKey === '5' ? 5 : state.kernelKey === 'scharr' ? -1 : 3;
 
   return `#!/usr/bin/env python3
 """
@@ -772,10 +870,11 @@ import numpy as np
 
 WIDTH = ${state.cols}
 EDGE_THRESHOLD = ${state.edgeThreshold}
-SOBEL_KSIZE = ${ksizeVal}  # ${preset.label}
+SOBEL_KSIZE = ${preset.ksize}  # ${preset.label}
 SATURATION_BOOST = ${state.saturationBoost}
 CONTRAST_BOOST = ${state.contrastBoost}
-DENSITY_RAMP = "${rampStr}"
+DENSITY_RAMP = ${JSON.stringify(rampStr)}
+VIEW_MODE = ${JSON.stringify(state.viewMode)}
 
 def render_strelitzia_sobel(image_path="public/ave-del-paraiso.jpg"):
     img = cv2.imread(image_path)
@@ -783,7 +882,7 @@ def render_strelitzia_sobel(image_path="public/ave-del-paraiso.jpg"):
         raise FileNotFoundError(f"No se encontró la imagen: {image_path}")
 
     h, w = img.shape[:2]
-    rows = max(20, int((h / w) * WIDTH * 0.5))
+    rows = max(16, int((h / w) * WIDTH * 0.5))
     resized = cv2.resize(img, (WIDTH, rows), interpolation=cv2.INTER_AREA)
 
     # Realce botánico HSV
@@ -799,33 +898,147 @@ def render_strelitzia_sobel(image_path="public/ave-del-paraiso.jpg"):
     gx = cv2.Sobel(blurred, cv2.CV_64F, 1, 0, ksize=SOBEL_KSIZE)
     gy = cv2.Sobel(blurred, cv2.CV_64F, 0, 1, ksize=SOBEL_KSIZE)
 
-    mag = np.hypot(gx, gy)
-    mag = (mag / (mag.max() + 1e-6)) * 255.0
-    angles = (np.degrees(np.arctan2(gy, gx)) + 180.0) % 180.0
+    mag_raw = np.hypot(gx, gy)
+    mag = (mag_raw / (float(mag_raw.max()) + 1e-6)) * 255.0
+    angle = (np.degrees(np.arctan2(gy, gx)) + 180.0) % 180.0
 
-    for y in range(rows):
-        line = []
-        for x in range(WIDTH):
-            lum, m, ang = int(gray[y, x]), float(mag[y, x]), float(angles[y, x])
-            if lum < 14 and m < EDGE_THRESHOLD:
-                line.append(" ")
-                continue
-            if m >= EDGE_THRESHOLD:
-                ch = "|" if (ang < 22.5 or ang >= 157.5) else "/" if ang < 67.5 else "-" if ang < 112.5 else "\\\\"
-                r, g, b = edge_rgb[y, x]
-            else:
-                idx = min(len(DENSITY_RAMP) - 1, max(1, int((lum / 255.0) * (len(DENSITY_RAMP) - 1))))
-                ch = DENSITY_RAMP[idx]
-                r, g, b = rgb[y, x]
-            line.append(f"\\033[38;2;{r};{g};{b}m{ch}\\033[0m")
-        sys.stdout.write("".join(line) + "\\n")
+    glyphs = np.select(
+        [angle < 22.5, angle < 67.5, angle < 112.5, angle < 157.5],
+        ["|", "/", "-", "\\\\"],
+        default="|",
+    )
+    ramp_arr = np.array(list(DENSITY_RAMP))
+    lum = gray.astype(np.int32)
+    active = ~((lum < 14) & (mag < EDGE_THRESHOLD))
+    edge_boost = np.minimum(255, (edge_rgb.astype(np.float64) * 1.12 + 14).astype(np.int32))
+
+    is_edge = active & (mag >= EDGE_THRESHOLD)
+    idx = np.minimum(len(DENSITY_RAMP) - 1, np.maximum(1, (lum / 255.0 * (len(DENSITY_RAMP) - 1)).astype(np.int32)))
+    chars = np.where(active, np.where(is_edge, glyphs, ramp_arr[idx]), " ")
+    out_rgb = np.where(active[..., None], np.where(is_edge[..., None], edge_boost, rgb.astype(np.int32)), 0)
+
+    for char_row, rgb_row in zip(chars.tolist(), out_rgb.tolist()):
+        sys.stdout.write(
+            "".join(" " if c == " " else f"\\033[38;2;{r};{g};{b}m{c}\\033[0m" for c, (r, g, b) in zip(char_row, rgb_row))
+            + "\\n"
+        )
 
 if __name__ == "__main__":
     render_strelitzia_sobel(sys.argv[1] if len(sys.argv) > 1 else "public/ave-del-paraiso.jpg")
 `;
 }
 
+async function handleRunPyodide() {
+  if (state.pyodideBusy || !state.sourceCanvas) return;
+  const btn = document.getElementById('btn-run-pyodide');
+  state.pyodideBusy = true;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = isPyodideReady() ? '🐍 Ejecutando cv2.Sobel...' : '⏳ Cargando Pyodide + OpenCV...';
+  }
+
+  try {
+    const pyGrid = await computeSobelGridWithPyodide(
+      state.sourceCanvas,
+      {
+        cols: state.cols,
+        edgeThreshold: state.edgeThreshold,
+        kernelKey: state.kernelKey,
+        saturationBoost: state.saturationBoost,
+        contrastBoost: state.contrastBoost,
+        rampKey: state.rampKey,
+        viewMode: state.viewMode
+      },
+      statusMsg => showToast(statusMsg, 0)
+    );
+
+    state.gridData = pyGrid;
+    state.lastPyodideMs = pyGrid.elapsedMs;
+    updateStatsAndHud();
+
+    const pill = document.getElementById('pyodide-runtime-pill');
+    const msEl = document.getElementById('stat-pyodide-ms');
+    if (pill && msEl) {
+      pill.hidden = false;
+      msEl.textContent = `${pyGrid.elapsedMs} ms`;
+    }
+
+    if (state.renderTarget === 'canvas') {
+      drawAsciiGridToCanvas();
+    } else {
+      renderSelectablePre();
+    }
+    flashCodeStages(['sobel_x', 'sobel_y', 'mag', 'angle', 'compose']);
+    showToast(`✓ Ejecutado en Python real (Pyodide + OpenCV WASM) en ${pyGrid.elapsedMs} ms`, 3600);
+  } catch (err) {
+    showToast(`Error en Pyodide: ${err.message || err}`, 4000);
+  } finally {
+    state.pyodideBusy = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '🐍 Ejecutar Python Real (Pyodide)';
+    }
+  }
+}
+
+async function handleExportMedia(kind) {
+  if (state.exportBusy || !state.sourceCanvas) return;
+  state.exportBusy = true;
+  const btnId = kind === 'webm' ? 'btn-export-webm' : 'btn-export-gif';
+  const btn = document.getElementById(btnId);
+  const origLabel = btn?.textContent || '';
+  if (btn) btn.disabled = true;
+
+  try {
+    const exporterFn = kind === 'webm' ? exportVerticalWebm : exportVerticalGif;
+    const label = kind === 'webm' ? 'WebM 9:16' : 'GIF 9:16';
+    showToast(`Generando ${label}... 0%`, 0);
+    await exporterFn(
+      phase => computeFrameForPhase(phase),
+      pct => {
+        if (btn) btn.textContent = `⏳ ${pct}%`;
+        showToast(`Exportando ${label}... ${pct}%`, 0);
+      }
+    );
+    showToast(`✓ ${label} descargado correctamente`, 3200);
+  } catch (err) {
+    showToast(`Error al exportar: ${err.message || err}`, 4000);
+  } finally {
+    state.exportBusy = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = origLabel;
+    }
+  }
+}
+
+function handleRouteChange() {
+  const isVmLab = window.location.hash === '#/vm-lab';
+  const vmContainer = document.getElementById('vm-dashboard-view');
+  const studioContainer = document.getElementById('studio-view');
+  if (!vmContainer || !studioContainer) return;
+
+  if (isVmLab) {
+    state.breezeActive = false;
+    document.getElementById('btn-toggle-breeze')?.classList.remove('active');
+    studioContainer.hidden = true;
+    vmContainer.hidden = false;
+    renderVmDashboard(vmContainer);
+  } else {
+    vmContainer.hidden = true;
+    studioContainer.hidden = false;
+    drawAsciiGridToCanvas();
+  }
+}
+
 function bindEvents() {
+  window.addEventListener('hashchange', handleRouteChange);
+  window.addEventListener('resize', () => {
+    if (state.renderTarget === 'canvas' && !state.breezeActive && !state.isRevealing) {
+      drawAsciiGridToCanvas();
+    }
+  });
+
   document.getElementById('btn-play-scan')?.addEventListener('click', () => {
     triggerStepByStepScan();
   });
@@ -845,7 +1058,12 @@ function bindEvents() {
     state.verticalFraming = !state.verticalFraming;
     e.currentTarget.classList.toggle('active', state.verticalFraming);
     document.getElementById('studio-workspace')?.classList.toggle('vertical-framing', state.verticalFraming);
+    drawAsciiGridToCanvas();
   });
+
+  document.getElementById('btn-export-webm')?.addEventListener('click', () => handleExportMedia('webm'));
+  document.getElementById('btn-export-gif')?.addEventListener('click', () => handleExportMedia('gif'));
+  document.getElementById('btn-run-pyodide')?.addEventListener('click', () => handleRunPyodide());
 
   document.querySelectorAll('[data-view-mode]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -862,15 +1080,33 @@ function bindEvents() {
     e.currentTarget.classList.toggle('expanded', state.pipExpanded);
   });
 
+  // Delegated click listener for Live Code Dock lines (no re-binding per frame)
+  document.getElementById('live-code-lines')?.addEventListener('click', e => {
+    const rowEl = e.target.closest('[data-code-idx]');
+    if (!rowEl) return;
+    const idx = Number(rowEl.getAttribute('data-code-idx'));
+    const stage = rowEl.getAttribute('data-stage');
+    state.activeCodeLine = idx;
+
+    if (stage === 'sobel_x' || stage === 'sobel_y' || stage === 'map_edge') {
+      setViewMode('edges');
+    } else if (stage === 'mag') {
+      setViewMode('magnitude');
+    } else if (stage === 'compose' || stage === 'render') {
+      setViewMode('combined');
+    }
+    renderLiveCodeDock(true);
+  });
+
   // Source switchers
   document.querySelectorAll('[data-source]').forEach(btn => {
     btn.addEventListener('click', () => {
       const src = btn.getAttribute('data-source');
       document.querySelectorAll('[data-source]').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      if (src === 'photo') loadPhotoPreset();
-      else loadProceduralPreset();
-      flashCodeLines([1]);
+      if (src === 'photo') loadPhotoPreset(true);
+      else loadProceduralPreset(true);
+      flashCodeStages(['input']);
     });
   });
 
@@ -884,10 +1120,11 @@ function bindEvents() {
         state.sourceType = 'upload';
         document.querySelectorAll('[data-source]').forEach(b => b.classList.remove('active'));
         state.sourceCanvas = extractCroppedImageCanvas(img);
+        state.sourceVersion++;
         renderPipPreview();
         recomputeAndRender();
         triggerStepByStepScan();
-        flashCodeLines([1]);
+        flashCodeStages(['input']);
         showToast('Imagen cargada y procesada con cv2.Sobel');
       };
       img.src = ev.target.result;
@@ -901,7 +1138,7 @@ function bindEvents() {
     document.getElementById('val-cols').textContent = `${state.cols} cols`;
     state.activeCodeLine = 2;
     recomputeAndRender(state.breezeActive ? state.breezePhase : null);
-    flashCodeLines([2]);
+    flashCodeStages(['resize']);
   });
 
   document.getElementById('slider-threshold')?.addEventListener('input', e => {
@@ -909,7 +1146,7 @@ function bindEvents() {
     document.getElementById('val-threshold').textContent = String(state.edgeThreshold);
     state.activeCodeLine = 10;
     recomputeAndRender(state.breezeActive ? state.breezePhase : null);
-    flashCodeLines([10]);
+    flashCodeStages(['compose']);
   });
 
   document.getElementById('select-kernel')?.addEventListener('change', e => {
@@ -917,7 +1154,7 @@ function bindEvents() {
     state.activeCodeLine = 5;
     renderKernelMatrices();
     recomputeAndRender(state.breezeActive ? state.breezePhase : null);
-    flashCodeLines([5, 6]);
+    flashCodeStages(['sobel_x', 'sobel_y']);
   });
 
   document.getElementById('slider-saturation')?.addEventListener('input', e => {
@@ -925,7 +1162,7 @@ function bindEvents() {
     document.getElementById('val-saturation').textContent = `${state.saturationBoost.toFixed(2)}×`;
     state.activeCodeLine = 3;
     recomputeAndRender(state.breezeActive ? state.breezePhase : null);
-    flashCodeLines([3]);
+    flashCodeStages(['hsv']);
   });
 
   document.getElementById('slider-contrast')?.addEventListener('input', e => {
@@ -933,14 +1170,14 @@ function bindEvents() {
     document.getElementById('val-contrast').textContent = `${state.contrastBoost.toFixed(2)}×`;
     state.activeCodeLine = 3;
     recomputeAndRender(state.breezeActive ? state.breezePhase : null);
-    flashCodeLines([3]);
+    flashCodeStages(['hsv']);
   });
 
   document.getElementById('select-ramp')?.addEventListener('change', e => {
     state.rampKey = e.target.value;
     state.activeCodeLine = 10;
     recomputeAndRender(state.breezeActive ? state.breezePhase : null);
-    flashCodeLines([10]);
+    flashCodeStages(['compose']);
   });
 
   // Canvas pointer inspection (Sobel Cell Inspector)
@@ -1012,9 +1249,10 @@ function bindEvents() {
 function init() {
   buildShellHTML();
   renderKernelMatrices();
-  renderLiveCodeDock();
+  renderLiveCodeDock(true);
   bindEvents();
   loadPhotoPreset();
+  handleRouteChange();
 }
 
 init();

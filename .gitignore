@@ -4,3 +4,8 @@ dist/
 *.local
 .env
 .env.*
+public/ave_del_paraiso_sobel.py
+__pycache__/
+*.pyc
+
+

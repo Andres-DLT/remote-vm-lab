@@ -30,6 +30,9 @@ export const KERNEL_PRESETS = {
   '3': {
     label: 'cv2.Sobel (ksize=3)',
     pyArg: 'ksize=3',
+    cliArg: '--ksize 3',
+    ksize: 3,
+    size: 3,
     gx: [
       [-1, 0, 1],
       [-2, 0, 2],
@@ -44,20 +47,30 @@ export const KERNEL_PRESETS = {
   '5': {
     label: 'cv2.Sobel (ksize=5)',
     pyArg: 'ksize=5',
+    cliArg: '--ksize 5',
+    ksize: 5,
+    size: 5,
     gx: [
-      [-1, 0, 1],
-      [-4, 0, 4],
-      [-1, 0, 1]
+      [-1, -2, 0, 2, 1],
+      [-4, -8, 0, 8, 4],
+      [-6, -12, 0, 12, 6],
+      [-4, -8, 0, 8, 4],
+      [-1, -2, 0, 2, 1]
     ],
     gy: [
-      [-1, -4, -1],
-      [0, 0, 0],
-      [1, 4, 1]
+      [-1, -4, -6, -4, -1],
+      [-2, -8, -12, -8, -2],
+      [0, 0, 0, 0, 0],
+      [2, 8, 12, 8, 2],
+      [1, 4, 6, 4, 1]
     ]
   },
   scharr: {
     label: 'cv2.Sobel (ksize=cv2.FILTER_SCHARR)',
     pyArg: 'ksize=-1',
+    cliArg: '--ksize -1',
+    ksize: -1,
+    size: 3,
     gx: [
       [-3, 0, 3],
       [-10, 0, 10],
@@ -71,6 +84,16 @@ export const KERNEL_PRESETS = {
   }
 };
 
+export function reflect101(idx, len) {
+  if (len <= 1) return 0;
+  let i = idx;
+  while (i < 0 || i >= len) {
+    if (i < 0) i = -i;
+    if (i >= len) i = 2 * (len - 1) - i;
+  }
+  return i;
+}
+
 export function mapAngleToEdgeGlyph(angleDeg) {
   if (angleDeg < 22.5 || angleDeg >= 157.5) return '|';
   if (angleDeg < 67.5) return '/';
@@ -78,7 +101,7 @@ export function mapAngleToEdgeGlyph(angleDeg) {
   return '\\';
 }
 
-function boostRgbSaturationAndContrast(r, g, b, satBoost, contrastBoost) {
+function boostRgbSaturationAndContrastInto(r, g, b, satBoost, contrastBoost, outArr, outOffset) {
   const rf = r / 255;
   const gf = g / 255;
   const bf = b / 255;
@@ -142,11 +165,9 @@ function boostRgbSaturationAndContrast(r, g, b, satBoost, contrastBoost) {
       break;
   }
 
-  return [
-    Math.min(255, Math.round(ro * 255)),
-    Math.min(255, Math.round(go * 255)),
-    Math.min(255, Math.round(bo * 255))
-  ];
+  outArr[outOffset] = Math.min(255, Math.round(ro * 255));
+  outArr[outOffset + 1] = Math.min(255, Math.round(go * 255));
+  outArr[outOffset + 2] = Math.min(255, Math.round(bo * 255));
 }
 
 /**
@@ -157,8 +178,8 @@ function boostRgbSaturationAndContrast(r, g, b, satBoost, contrastBoost) {
 export function renderProceduralStrelitziaToCanvas(targetCanvas, breezePhase = 0) {
   const w = 640;
   const h = 800;
-  targetCanvas.width = w;
-  targetCanvas.height = h;
+  if (targetCanvas.width !== w) targetCanvas.width = w;
+  if (targetCanvas.height !== h) targetCanvas.height = h;
   const ctx = targetCanvas.getContext('2d');
 
   ctx.fillStyle = '#000000';
@@ -300,16 +321,21 @@ export function renderProceduralStrelitziaToCanvas(targetCanvas, breezePhase = 0
   ctx.stroke();
 }
 
+let sharedCropTempCanvas = null;
+
 /**
  * Recorta automáticamente el margen negro alrededor de la flor para aprovechar toda la rejilla ASCII.
  */
-export function extractCroppedImageCanvas(sourceEl) {
+export function extractCroppedImageCanvas(sourceEl, targetCroppedCanvas = null) {
   const srcW = sourceEl.naturalWidth || sourceEl.width || 640;
   const srcH = sourceEl.naturalHeight || sourceEl.height || 800;
 
-  const temp = document.createElement('canvas');
-  temp.width = srcW;
-  temp.height = srcH;
+  if (!sharedCropTempCanvas && typeof document !== 'undefined') {
+    sharedCropTempCanvas = document.createElement('canvas');
+  }
+  const temp = sharedCropTempCanvas || targetCroppedCanvas;
+  if (temp.width !== srcW) temp.width = srcW;
+  if (temp.height !== srcH) temp.height = srcH;
   const tCtx = temp.getContext('2d', { willReadFrequently: true });
   tCtx.drawImage(sourceEl, 0, 0, srcW, srcH);
 
@@ -324,8 +350,8 @@ export function extractCroppedImageCanvas(sourceEl) {
   for (let y = 0; y < srcH; y += step) {
     for (let x = 0; x < srcW; x += step) {
       const idx = (y * srcW + x) * 4;
-      const lum = 0.299 * imgData[idx] + 0.587 * imgData[idx + 1] + 0.114 * imgData[idx + 2];
-      if (lum > 15 && imgData[idx + 3] > 30) {
+      const lum = (9798 * imgData[idx] + 19235 * imgData[idx + 1] + 3735 * imgData[idx + 2] + 16384) >> 15;
+      if (lum > 14 && imgData[idx + 3] > 30) {
         if (x < minX) minX = x;
         if (y < minY) minY = y;
         if (x > maxX) maxX = x;
@@ -348,114 +374,140 @@ export function extractCroppedImageCanvas(sourceEl) {
   const cw = x1 - x0;
   const ch = y1 - y0;
 
-  const cropped = document.createElement('canvas');
-  cropped.width = cw;
-  cropped.height = ch;
+  const cropped = targetCroppedCanvas || document.createElement('canvas');
+  if (cropped.width !== cw) cropped.width = cw;
+  if (cropped.height !== ch) cropped.height = ch;
   cropped.getContext('2d').drawImage(temp, x0, y0, cw, ch, 0, 0, cw, ch);
   return cropped;
 }
 
+// Buffers reutilizables para evitar asignaciones de memoria y GC en Brisa Viva 60fps
+const scratchBuffers = {
+  size: 0,
+  gray: null,
+  blurred: null,
+  rgbBoosted: null,
+  edgeRgb: null,
+  gxArr: null,
+  gyArr: null,
+  magRaw: null,
+  angleArr: null
+};
+
+function ensureScratchBuffers(total) {
+  if (scratchBuffers.size !== total) {
+    scratchBuffers.size = total;
+    scratchBuffers.gray = new Uint8Array(total);
+    scratchBuffers.blurred = new Uint8Array(total);
+    scratchBuffers.rgbBoosted = new Uint8Array(total * 3);
+    scratchBuffers.edgeRgb = new Uint8Array(total * 3);
+    scratchBuffers.gxArr = new Float64Array(total);
+    scratchBuffers.gyArr = new Float64Array(total);
+    scratchBuffers.magRaw = new Float64Array(total);
+    scratchBuffers.angleArr = new Float64Array(total);
+  }
+  return scratchBuffers;
+}
+
+const GAUSSIAN_3X3 = [
+  [1, 2, 1],
+  [2, 4, 2],
+  [1, 2, 1]
+];
+
 /**
- * Ejecuta el pipeline cv2.Sobel sobre el canvas fuente y devuelve la matriz completa de celdas ASCII.
+ * Ejecuta el pipeline cv2.Sobel sobre un buffer RGBA de tamaño (cols x rows).
+ * Función pura sin dependencia del DOM para máxima velocidad y pruebas de paridad con Python.
  */
-export function computeSobelAsciiGrid(sourceCanvas, options) {
+export function computeSobelAsciiGridFromRgba(rgba, cols, rows, options = {}, reusePreproc = false) {
   const {
-    cols = 88,
     edgeThreshold = 52,
     kernelKey = '3',
     saturationBoost = 1.35,
     contrastBoost = 1.15,
     rampKey = 'classic',
     viewMode = 'combined',
-    breezePhase = null,
-    charAspect = 0.5
+    bgCutoff = 14
   } = options;
 
-  const srcW = sourceCanvas.width;
-  const srcH = sourceCanvas.height;
-  const rows = Math.max(20, Math.round((srcH / srcW) * cols * charAspect));
-
-  const sampleCanvas = document.createElement('canvas');
-  sampleCanvas.width = cols;
-  sampleCanvas.height = rows;
-  const sCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
-  sCtx.fillStyle = '#000000';
-  sCtx.fillRect(0, 0, cols, rows);
-
-  if (breezePhase !== null) {
-    // Aplicar deformación sinusoidal por franjas horizontales para simular brisa viva
-    const slices = rows;
-    for (let y = 0; y < slices; y++) {
-      const vFactor = Math.pow(1 - y / slices, 1.35);
-      const dx = Math.sin(y / 6.5 + breezePhase) * (cols * 0.016) * vFactor;
-      const sy = (y / slices) * srcH;
-      const sh = srcH / slices;
-      sCtx.drawImage(sourceCanvas, 0, sy, srcW, sh, dx, y, cols, 1.15);
-    }
-  } else {
-    sCtx.drawImage(sourceCanvas, 0, 0, cols, rows);
-  }
-
-  const rgba = sCtx.getImageData(0, 0, cols, rows).data;
   const total = cols * rows;
+  const { gray, blurred, rgbBoosted, edgeRgb, gxArr, gyArr, magRaw, angleArr } = ensureScratchBuffers(total);
 
-  const gray = new Float32Array(total);
-  const rgbBoosted = new Uint8Array(total * 3);
+  if (!reusePreproc) {
+    for (let i = 0; i < total; i++) {
+      const r = rgba[i * 4];
+      const g = rgba[i * 4 + 1];
+      const b = rgba[i * 4 + 2];
+      // Mismo coeficiente entero BT.601 de 15 bits que cv2.cvtColor(BGR2GRAY) en OpenCV
+      gray[i] = (9798 * r + 19235 * g + 3735 * b + 16384) >> 15;
+      boostRgbSaturationAndContrastInto(r, g, b, saturationBoost, contrastBoost, rgbBoosted, i * 3);
+    }
 
-  for (let i = 0; i < total; i++) {
-    const r = rgba[i * 4];
-    const g = rgba[i * 4 + 1];
-    const b = rgba[i * 4 + 2];
-    gray[i] = 0.299 * r + 0.587 * g + 0.114 * b;
-    const [br, bg, bb] = boostRgbSaturationAndContrast(r, g, b, saturationBoost, contrastBoost);
-    rgbBoosted[i * 3] = br;
-    rgbBoosted[i * 3 + 1] = bg;
-    rgbBoosted[i * 3 + 2] = bb;
-  }
-
-  // 1. GaussianBlur 3x3 (como cv2.GaussianBlur(gray, (3, 3), 0))
-  const blurred = new Float32Array(total);
-  const gKernel = [
-    [1, 2, 1],
-    [2, 4, 2],
-    [1, 2, 1]
-  ];
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < cols; x++) {
-      let sum = 0;
-      for (let ky = -1; ky <= 1; ky++) {
-        const ny = Math.min(rows - 1, Math.max(0, y + ky));
-        for (let kx = -1; kx <= 1; kx++) {
-          const nx = Math.min(cols - 1, Math.max(0, x + kx));
-          sum += gray[ny * cols + nx] * gKernel[ky + 1][kx + 1];
+    // 1. GaussianBlur 3x3 con BORDER_REFLECT_101 (idéntico a cv2.GaussianBlur(gray, (3, 3), 0))
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        let sum = 0;
+        for (let ky = -1; ky <= 1; ky++) {
+          const ny = reflect101(y + ky, rows);
+          const rowOffset = ny * cols;
+          const kRow = GAUSSIAN_3X3[ky + 1];
+          for (let kx = -1; kx <= 1; kx++) {
+            const nx = reflect101(x + kx, cols);
+            sum += gray[rowOffset + nx] * kRow[kx + 1];
+          }
         }
+        blurred[y * cols + x] = (sum + 8) >> 4;
       }
-      blurred[y * cols + x] = sum / 16.0;
+    }
+
+    // 2. Dilatación 3x3 por canal (como cv2.dilate(rgb, np.ones((3, 3), np.uint8)))
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        let maxR = 0,
+          maxG = 0,
+          maxB = 0;
+        for (let ky = -1; ky <= 1; ky++) {
+          const ny = Math.min(rows - 1, Math.max(0, y + ky));
+          for (let kx = -1; kx <= 1; kx++) {
+            const nx = Math.min(cols - 1, Math.max(0, x + kx));
+            const nIdx3 = (ny * cols + nx) * 3;
+            if (rgbBoosted[nIdx3] > maxR) maxR = rgbBoosted[nIdx3];
+            if (rgbBoosted[nIdx3 + 1] > maxG) maxG = rgbBoosted[nIdx3 + 1];
+            if (rgbBoosted[nIdx3 + 2] > maxB) maxB = rgbBoosted[nIdx3 + 2];
+          }
+        }
+        const idx3 = (y * cols + x) * 3;
+        edgeRgb[idx3] = maxR;
+        edgeRgb[idx3 + 1] = maxG;
+        edgeRgb[idx3 + 2] = maxB;
+      }
     }
   }
 
-  // 2. cv2.Sobel Gx & Gy
+  // 3. cv2.Sobel Gx & Gy (soporta kernels 3x3, 5x5 real y Scharr con BORDER_REFLECT_101)
   const preset = KERNEL_PRESETS[kernelKey] || KERNEL_PRESETS['3'];
   const kGx = preset.gx;
   const kGy = preset.gy;
+  const kSize = preset.size || kGx.length;
+  const kRadius = (kSize - 1) >> 1;
 
-  const gxArr = new Float32Array(total);
-  const gyArr = new Float32Array(total);
-  const magRaw = new Float32Array(total);
-  const angleArr = new Float32Array(total);
-  let maxMag = 1e-6;
+  let maxMag = 0;
 
   for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
       let sx = 0;
       let sy = 0;
-      for (let ky = -1; ky <= 1; ky++) {
-        const ny = Math.min(rows - 1, Math.max(0, y + ky));
-        for (let kx = -1; kx <= 1; kx++) {
-          const nx = Math.min(cols - 1, Math.max(0, x + kx));
-          const val = blurred[ny * cols + nx];
-          sx += val * kGx[ky + 1][kx + 1];
-          sy += val * kGy[ky + 1][kx + 1];
+      for (let ky = -kRadius; ky <= kRadius; ky++) {
+        const ny = reflect101(y + ky, rows);
+        const rowOffset = ny * cols;
+        const gxRow = kGx[ky + kRadius];
+        const gyRow = kGy[ky + kRadius];
+        for (let kx = -kRadius; kx <= kRadius; kx++) {
+          const nx = reflect101(x + kx, cols);
+          const val = blurred[rowOffset + nx];
+          const kCol = kx + kRadius;
+          sx += val * gxRow[kCol];
+          sy += val * gyRow[kCol];
         }
       }
       const idx = y * cols + x;
@@ -464,41 +516,13 @@ export function computeSobelAsciiGrid(sourceCanvas, options) {
       const m = Math.hypot(sx, sy);
       magRaw[idx] = m;
       if (m > maxMag) maxMag = m;
-      angleArr[idx] = ((Math.atan2(sy, sx) * 180) / Math.PI + 180) % 180;
+      angleArr[idx] = (((Math.atan2(sy, sx) * 180) / Math.PI) + 180) % 180;
     }
   }
 
-  // 3. Dilatación 3x3 de color para que los bordes de silueta hereden el color vivo del pétalo
-  const edgeRgb = new Uint8Array(total * 3);
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < cols; x++) {
-      let bestLum = -1;
-      let br = 0,
-        bg = 0,
-        bb = 0;
-      for (let ky = -1; ky <= 1; ky++) {
-        const ny = Math.min(rows - 1, Math.max(0, y + ky));
-        for (let kx = -1; kx <= 1; kx++) {
-          const nx = Math.min(cols - 1, Math.max(0, x + kx));
-          const nIdx = ny * cols + nx;
-          if (gray[nIdx] > bestLum) {
-            bestLum = gray[nIdx];
-            br = rgbBoosted[nIdx * 3];
-            bg = rgbBoosted[nIdx * 3 + 1];
-            bb = rgbBoosted[nIdx * 3 + 2];
-          }
-        }
-      }
-      const idx = y * cols + x;
-      edgeRgb[idx * 3] = br;
-      edgeRgb[idx * 3 + 1] = bg;
-      edgeRgb[idx * 3 + 2] = bb;
-    }
-  }
-
+  const denom = (maxMag > 0 ? maxMag : 1.0) + 1e-6;
   const rampStr = (CHAR_RAMPS[rampKey] || CHAR_RAMPS.classic).ramp;
   const rampLen = rampStr.length;
-  const bgCutoff = 13;
 
   const grid = new Array(rows);
   let edgeCount = 0;
@@ -509,7 +533,7 @@ export function computeSobelAsciiGrid(sourceCanvas, options) {
     for (let x = 0; x < cols; x++) {
       const idx = y * cols + x;
       const lum = gray[idx];
-      const mag = (magRaw[idx] / maxMag) * 255.0;
+      const mag = (magRaw[idx] / denom) * 255.0;
       const angle = angleArr[idx];
       const gx = gxArr[idx];
       const gy = gyArr[idx];
@@ -533,12 +557,13 @@ export function computeSobelAsciiGrid(sourceCanvas, options) {
       }
 
       activeCount++;
-      let r = rgbBoosted[idx * 3];
-      let g = rgbBoosted[idx * 3 + 1];
-      let b = rgbBoosted[idx * 3 + 2];
-      const er = edgeRgb[idx * 3];
-      const eg = edgeRgb[idx * 3 + 1];
-      const eb = edgeRgb[idx * 3 + 2];
+      const idx3 = idx * 3;
+      let r = rgbBoosted[idx3];
+      let g = rgbBoosted[idx3 + 1];
+      let b = rgbBoosted[idx3 + 2];
+      const er = edgeRgb[idx3];
+      const eg = edgeRgb[idx3 + 1];
+      const eb = edgeRgb[idx3 + 2];
 
       let ch = ' ';
       let isEdge = false;
@@ -548,32 +573,32 @@ export function computeSobelAsciiGrid(sourceCanvas, options) {
           ch = edgeChar;
           isEdge = true;
           edgeCount++;
-          r = Math.min(255, Math.round(er * 1.15 + 18));
-          g = Math.min(255, Math.round(eg * 1.15 + 18));
-          b = Math.min(255, Math.round(eb * 1.15 + 18));
+          r = Math.min(255, Math.trunc(er * 1.12 + 14));
+          g = Math.min(255, Math.trunc(eg * 1.12 + 14));
+          b = Math.min(255, Math.trunc(eb * 1.12 + 14));
         } else {
           ch = ' ';
         }
       } else if (viewMode === 'magnitude') {
-        const rIdx = Math.min(rampLen - 1, Math.floor((mag / 255.0) * (rampLen - 1)));
+        const rIdx = Math.min(rampLen - 1, Math.trunc((mag / 255.0) * (rampLen - 1)));
         ch = rampStr[rIdx];
         isEdge = mag >= edgeThreshold;
         if (isEdge) edgeCount++;
         const normM = mag / 255.0;
-        r = Math.min(255, Math.round(255 * Math.min(1, normM * 1.3)));
-        g = Math.min(255, Math.round(195 * Math.pow(normM, 1.25)));
-        b = normM > 0.07 ? Math.min(255, Math.round(80 + 165 * (1 - normM))) : 0;
+        r = Math.min(255, Math.trunc(255 * normM * 1.25));
+        g = Math.min(255, Math.trunc(190 * Math.pow(normM, 1.3)));
+        b = normM > 0.08 ? Math.min(255, Math.trunc(95 + 160 * (1 - normM))) : 0;
       } else {
         // Modo combinado (Bordes direccionales cv2.Sobel + densidad por luminancia)
         if (mag >= edgeThreshold) {
           ch = edgeChar;
           isEdge = true;
           edgeCount++;
-          r = Math.min(255, Math.round(er * 1.14 + 16));
-          g = Math.min(255, Math.round(eg * 1.14 + 16));
-          b = Math.min(255, Math.round(eb * 1.14 + 16));
+          r = Math.min(255, Math.trunc(er * 1.12 + 14));
+          g = Math.min(255, Math.trunc(eg * 1.12 + 14));
+          b = Math.min(255, Math.trunc(eb * 1.12 + 14));
         } else {
-          const rIdx = Math.min(rampLen - 1, Math.max(1, Math.floor((lum / 255.0) * (rampLen - 1))));
+          const rIdx = Math.min(rampLen - 1, Math.max(1, Math.trunc((lum / 255.0) * (rampLen - 1))));
           ch = rampStr[rIdx];
         }
       }
@@ -602,12 +627,72 @@ export function computeSobelAsciiGrid(sourceCanvas, options) {
     stats: {
       cols,
       rows,
-      maxMag: Math.round(maxMag),
+      maxMag: Math.round(maxMag * 10) / 10,
       edgeCount,
       activeCount,
       edgeRatio: ((edgeCount / Math.max(1, activeCount)) * 100).toFixed(1)
     }
   };
+}
+
+let sharedSampleCanvas = null;
+let sharedSampleCtx = null;
+let cachedPreprocKey = '';
+
+/**
+ * Ejecuta el pipeline cv2.Sobel sobre el canvas fuente reutilizando el canvas de muestreo
+ * y cacheando el preprocesado de color/desenfoque cuando la imagen de entrada no cambia.
+ */
+export function computeSobelAsciiGrid(sourceCanvas, options = {}) {
+  const {
+    cols = 88,
+    saturationBoost = 1.35,
+    contrastBoost = 1.15,
+    breezePhase = null,
+    charAspect = 0.5,
+    sourceVersion = 0
+  } = options;
+
+  const srcW = sourceCanvas.width;
+  const srcH = sourceCanvas.height;
+  const rows = Math.max(16, Math.trunc((srcH / srcW) * cols * charAspect));
+
+  if (!sharedSampleCanvas) {
+    sharedSampleCanvas = document.createElement('canvas');
+    sharedSampleCtx = sharedSampleCanvas.getContext('2d', { willReadFrequently: true });
+  }
+  if (sharedSampleCanvas.width !== cols) sharedSampleCanvas.width = cols;
+  if (sharedSampleCanvas.height !== rows) sharedSampleCanvas.height = rows;
+
+  const preprocKey =
+    breezePhase === null
+      ? `${sourceVersion}:${srcW}x${srcH}:${cols}x${rows}:${saturationBoost}:${contrastBoost}`
+      : '';
+  const reusePreproc = preprocKey !== '' && preprocKey === cachedPreprocKey;
+
+  let rgba = null;
+  if (!reusePreproc) {
+    sharedSampleCtx.fillStyle = '#000000';
+    sharedSampleCtx.fillRect(0, 0, cols, rows);
+
+    if (breezePhase !== null) {
+      // Aplicar deformación sinusoidal por franjas horizontales para simular brisa viva
+      const slices = rows;
+      for (let y = 0; y < slices; y++) {
+        const vFactor = Math.pow(1 - y / slices, 1.35);
+        const dx = Math.sin(y / 6.5 + breezePhase) * (cols * 0.016) * vFactor;
+        const sy = (y / slices) * srcH;
+        const sh = srcH / slices;
+        sharedSampleCtx.drawImage(sourceCanvas, 0, sy, srcW, sh, dx, y, cols, 1.15);
+      }
+    } else {
+      sharedSampleCtx.drawImage(sourceCanvas, 0, 0, cols, rows);
+    }
+    rgba = sharedSampleCtx.getImageData(0, 0, cols, rows).data;
+    cachedPreprocKey = preprocKey;
+  }
+
+  return computeSobelAsciiGridFromRgba(rgba, cols, rows, options, reusePreproc);
 }
 
 export function gridToPlainText(gridData) {

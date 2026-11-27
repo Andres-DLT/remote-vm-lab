@@ -23,9 +23,11 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Install dependencies and build Vite app
+      - name: Install dependencies, run JS-Python parity tests, and build Vite app
         run: |
+          sudo apt-get update && sudo apt-get install -y python3-opencv python3-numpy
           npm ci
+          npm test
           npm run build
           touch dist/.nojekyll
 
