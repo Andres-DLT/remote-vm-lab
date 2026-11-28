@@ -119,9 +119,11 @@ for (const rampKey of Object.keys(CHAR_RAMPS)) {
   });
 }
 
-test('UX/UI: cabecera limpia con menú Exportar, barra unificada de escena, código plegable, lupa dinámica y pestañas móviles', () => {
+test('UX/UI: cabecera limpia con menú Exportar, barra unificada de escena, código plegable, lupa dinámica, pestañas móviles, sin emojis ni restos de vm-lab', () => {
   const mainJs = readFileSync(new URL('../src/main.js', import.meta.url), 'utf-8');
   const styleCss = readFileSync(new URL('../src/style.css', import.meta.url), 'utf-8');
+  const exporterJs = readFileSync(new URL('../src/exporter.js', import.meta.url), 'utf-8');
+  const pyScript = readFileSync(new URL('../ave_del_paraiso_sobel.py', import.meta.url), 'utf-8');
 
   // 1. Cabecera con menú desplegable Exportar y sin botones duplicados
   assert.match(mainJs, /id="btn-export-menu"/);
@@ -129,7 +131,7 @@ test('UX/UI: cabecera limpia con menú Exportar, barra unificada de escena, cód
   assert.doesNotMatch(mainJs, /id="btn-play-story"/);
   assert.doesNotMatch(mainJs, /id="choreo-grid"/);
 
-  // 2. Barra única de escena con modos, transporte ⏮ ⏯ ⏭ y leyenda compacta
+  // 2. Barra única de escena con modos, transporte Ant./Pausa/Sig. y leyenda compacta
   assert.match(mainJs, /id="stage-control-bar"/);
   assert.match(mainJs, /id="btn-story-prev"/);
   assert.match(mainJs, /id="btn-story-next"/);
@@ -151,5 +153,15 @@ test('UX/UI: cabecera limpia con menú Exportar, barra unificada de escena, cód
   assert.match(mainJs, /id="coach-mark"/);
   assert.match(mainJs, /id="mobile-tabbar"/);
   assert.match(styleCss, /@media \(prefers-reduced-motion: reduce\)/);
+
+  // 6. Cero emojis en la UI y cero referencias a vm-lab / vmDashboard
+  const emojiRegex = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{23E9}-\u{23FA}\u{FE0F}]/u;
+  assert.doesNotMatch(mainJs, emojiRegex);
+  assert.doesNotMatch(styleCss, emojiRegex);
+  assert.doesNotMatch(exporterJs, emojiRegex);
+  assert.doesNotMatch(pyScript, emojiRegex);
+  assert.doesNotMatch(mainJs, /vm-lab|vmDashboard/i);
+  assert.doesNotMatch(styleCss, /\.vm-/);
 });
+
 

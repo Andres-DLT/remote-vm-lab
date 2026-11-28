@@ -236,7 +236,7 @@ export function renderVerticalCompositeFrame(
   }
 
   // Partículas bioluminiscentes de polen ASCII flotando desde la cresta
-  const sparkGlyphs = ['✦', '*', '+', '·'];
+  const sparkGlyphs = ['*', '+', '·', '°'];
   const sparkColors = ['#fde047', '#fb923c', '#60a5fa', '#4ade80'];
   ctx.font = `700 ${Math.max(10, Math.round(fontPx * 1.15))}px "JetBrains Mono", monospace`;
   for (let i = 0; i < 16; i++) {
@@ -262,7 +262,7 @@ export function renderVerticalCompositeFrame(
   ctx.fillStyle = '#fde047';
   ctx.font = `600 ${Math.round(width * 0.0195)}px "Plus Jakarta Sans", sans-serif`;
   ctx.textBaseline = 'middle';
-  ctx.fillText(`💡 ${meta.codeExplain}`, 14, dockTop + explainH * 0.5);
+  ctx.fillText(meta.codeExplain, 14, dockTop + explainH * 0.5);
 
   const linesStart = dockTop + explainH + 4;
   const lineH = (dockH - explainH - 8) / CODE_LINES_PREVIEW.length;

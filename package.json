@@ -1,5 +1,5 @@
 {
-  "name": "remote-vm-lab",
+  "name": "ave-del-paraiso-sobel",
   "private": true,
   "version": "1.0.0",
   "description": "Ave del Paraíso (Strelitzia reginae) — Arte ASCII direccional con cv2.Sobel en terminal Python y estudio web interactivo con código en vivo abajo",

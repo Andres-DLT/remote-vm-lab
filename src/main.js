@@ -10,12 +10,11 @@ import {
   gridToPlainText,
   renderProceduralStrelitziaToCanvas
 } from './sobelEngine.js';
-import { renderVmDashboard } from './vmDashboard.js';
 
 const STORY_ACTS = [
   {
     act: 1,
-    shortLabel: '1. 📸 Foto Real',
+    shortLabel: '1. Foto Real',
     badge: 'PASO 1 DE 5 • LA FLOR REAL',
     title: 'Empezamos con la fotografía real del Ave del Paraíso (Strelitzia reginae)',
     subtitle:
@@ -24,7 +23,7 @@ const STORY_ACTS = [
   },
   {
     act: 2,
-    shortLabel: '2. 🟠 Escáner Gx (|)',
+    shortLabel: '2. Escáner Gx (|)',
     badge: 'PASO 2 DE 5 • DERIVADA HORIZONTAL Gx',
     title: 'cv2.Sobel(dx=1, dy=0) detecta cambios de luz de izquierda a derecha → traza "|"',
     subtitle:
@@ -33,7 +32,7 @@ const STORY_ACTS = [
   },
   {
     act: 3,
-    shortLabel: '3. 🔵 Escáner Gy (-)',
+    shortLabel: '3. Escáner Gy (-)',
     badge: 'PASO 3 DE 5 • DERIVADA VERTICAL Gy',
     title: 'cv2.Sobel(dx=0, dy=1) detecta cambios de luz de arriba a abajo → traza "-"',
     subtitle:
@@ -42,7 +41,7 @@ const STORY_ACTS = [
   },
   {
     act: 4,
-    shortLabel: '4. 🧭 Brújula (/ | \\ -)',
+    shortLabel: '4. Brújula (/ | \\ -)',
     badge: 'PASO 4 DE 5 • BRÚJULA DE ÁNGULOS arctan2(Gy, Gx)',
     title: 'Combinamos Gx y Gy para obtener el ángulo exacto θ° de cada pétalo (→ ↗ ↑ ↖)',
     subtitle:
@@ -51,7 +50,7 @@ const STORY_ACTS = [
   },
   {
     act: 5,
-    shortLabel: '5. 🌺 Floración Viva',
+    shortLabel: '5. Floración Viva',
     badge: 'PASO 5 DE 5 • ARTE ASCII VIVO + CORTINA RAYOS X',
     title: 'Relleno de luz + color botánico 24-bit + floración cinética y polen vivo',
     subtitle:
@@ -181,7 +180,7 @@ function prefersReducedMotion() {
 let reducedMotion = prefersReducedMotion();
 
 function initPollenParticles(count = 28) {
-  const glyphs = ['✦', '*', '+', '·', '°'];
+  const glyphs = ['*', '+', '·', '°'];
   const colors = [
     [253, 224, 71],  // Polen dorado
     [251, 146, 60],  // Naranja fuego
@@ -202,7 +201,7 @@ function initPollenParticles(count = 28) {
 }
 
 function spawnPollenBurst(normX, normY, count = 7) {
-  const glyphs = ['✦', '*', '+'];
+  const glyphs = ['*', '+', '·'];
   const colors = [
     [253, 224, 71],
     [251, 146, 60],
@@ -231,7 +230,6 @@ function spawnPollenBurst(normX, normY, count = 7) {
 function buildShellHTML() {
   const app = document.getElementById('app');
   app.innerHTML = `
-    <div id="vm-dashboard-view" hidden></div>
     <div class="studio-shell" id="studio-view">
       <header class="studio-header">
         <div class="brand-group">
@@ -255,10 +253,10 @@ function buildShellHTML() {
             aria-pressed="true"
             title="Activar/Pausar todo el movimiento de la flor"
           >
-            🌺 Flor Viva
+            Flor Viva
           </button>
           <button type="button" class="btn btn-vertical" id="btn-toggle-framing" aria-pressed="false" title="Encuadre vertical 9:16 para móvil y redes">
-            📱 9:16
+            9:16
           </button>
 
           <div class="menu-wrap" id="export-menu-wrap">
@@ -270,25 +268,25 @@ function buildShellHTML() {
               aria-expanded="false"
               aria-controls="export-menu"
             >
-              📤 Exportar <span class="menu-caret" aria-hidden="true">▾</span>
+              Exportar <span class="menu-caret" aria-hidden="true">▾</span>
             </button>
             <div class="menu-popover" id="export-menu" role="menu" hidden>
               <div class="menu-section-label">Video vertical 9:16</div>
               <button type="button" class="menu-item" role="menuitem" id="btn-export-webm">
-                🎥 Grabar video WebM <small>historia completa</small>
+                Grabar video WebM <small>historia completa</small>
               </button>
               <button type="button" class="menu-item" role="menuitem" id="btn-export-gif">
-                🎞️ Exportar GIF animado <small>432×768</small>
+                Exportar GIF animado <small>432×768</small>
               </button>
               <div class="menu-section-label">Copiar</div>
               <button type="button" class="menu-item" role="menuitem" id="btn-copy-ascii">
-                📋 Arte ASCII (texto plano)
+                Arte ASCII (texto plano)
               </button>
               <button type="button" class="menu-item" role="menuitem" id="btn-copy-ansi">
-                🎨 ASCII con color ANSI <small>para terminal</small>
+                ASCII con color ANSI <small>para terminal</small>
               </button>
               <button type="button" class="menu-item" role="menuitem" id="btn-copy-python">
-                📝 Script Python <small>con tus parámetros</small>
+                Script Python <small>con tus parámetros</small>
               </button>
               <div class="menu-section-label">Descargar</div>
               <a
@@ -298,11 +296,7 @@ function buildShellHTML() {
                 href="./ave_del_paraiso_sobel.py"
                 download="ave_del_paraiso_sobel.py"
               >
-                🐍 ave_del_paraiso_sobel.py
-              </a>
-              <div class="menu-divider" role="separator"></div>
-              <a class="menu-item" role="menuitem" id="btn-open-vm-lab" href="#/vm-lab">
-                🖥️ Abrir Remote VM Lab
+                ave_del_paraiso_sobel.py
               </a>
             </div>
           </div>
@@ -316,21 +310,21 @@ function buildShellHTML() {
           <div class="stage-control-bar" id="stage-control-bar">
             <div class="choreo-segment" role="radiogroup" aria-label="Modo de animación">
               <button type="button" class="seg-btn active" data-choreo="story" role="radio" aria-checked="true" title="Explicación guiada en 5 pasos">
-                🎬 <span class="seg-label">Historia</span>
+                <span class="seg-label">Historia</span>
               </button>
               <button type="button" class="seg-btn" data-choreo="bloom" role="radio" aria-checked="false" title="Floración cinética + polen">
-                🌺 <span class="seg-label">Floración</span>
+                <span class="seg-label">Floración</span>
               </button>
               <button type="button" class="seg-btn" data-choreo="curtain" role="radio" aria-checked="false" title="Compara Foto real ↔ Arte ASCII arrastrando ↔">
-                🌗 <span class="seg-label">Cortina</span>
+                <span class="seg-label">Cortina</span>
               </button>
               <button type="button" class="seg-btn" data-choreo="pulse" role="radio" aria-checked="false" title="Pulso bioluminiscente por las nervaduras">
-                ⚡ <span class="seg-label">Pulso</span>
+                <span class="seg-label">Pulso</span>
               </button>
             </div>
 
             <div class="story-transport" id="story-transport">
-              <button type="button" class="icon-btn" id="btn-story-prev" aria-label="Paso anterior" title="Paso anterior">⏮</button>
+              <button type="button" class="icon-btn" id="btn-story-prev" aria-label="Paso anterior" title="Paso anterior">Ant.</button>
               <div class="story-steps-pills" role="tablist" aria-label="Pasos de cómo funciona cv2.Sobel">
                 ${STORY_ACTS.map(
                   s => `
@@ -348,7 +342,7 @@ function buildShellHTML() {
                 `
                 ).join('')}
               </div>
-              <button type="button" class="icon-btn" id="btn-story-next" aria-label="Paso siguiente" title="Paso siguiente">⏭</button>
+              <button type="button" class="icon-btn" id="btn-story-next" aria-label="Paso siguiente" title="Paso siguiente">Sig.</button>
               <button
                 type="button"
                 class="icon-btn icon-btn-accent"
@@ -356,10 +350,10 @@ function buildShellHTML() {
                 aria-label="Pausar avance automático"
                 aria-pressed="true"
                 title="Pausar / reanudar el avance automático de pasos"
-              >⏸</button>
+              >Pausa</button>
             </div>
 
-            <button type="button" class="icon-btn" id="btn-trigger-shockwave" aria-label="Lanzar onda de choque vectorial" title="Lanzar onda de choque vectorial">💥</button>
+            <button type="button" class="icon-btn" id="btn-trigger-shockwave" aria-label="Lanzar onda de choque vectorial" title="Lanzar onda de choque vectorial">Onda</button>
           </div>
 
           <!-- ONE-LINE STORY CAPTION -->
@@ -382,19 +376,19 @@ function buildShellHTML() {
 
             <div class="view-mode-tabs" role="tablist">
               <button type="button" class="mode-tab active" data-view-mode="combined" id="tab-mode-combined">
-                🌺 Sobel + Color
+                Sobel + Color
               </button>
               <button type="button" class="mode-tab" data-view-mode="edges" id="tab-mode-edges">
-                📐 Trazos (/ | \\ -)
+                Trazos (/ | \\ -)
               </button>
               <button type="button" class="mode-tab" data-view-mode="vectors" id="tab-mode-vectors">
-                🧭 Flechas ∇I (→ ↗ ↑)
+                Flechas ∇I (→ ↗ ↑)
               </button>
               <button type="button" class="mode-tab" data-view-mode="magnitude" id="tab-mode-magnitude">
-                🔥 Magnitud |G|
+                Magnitud |G|
               </button>
               <button type="button" class="mode-tab" id="btn-toggle-selectable">
-                🔤 Seleccionar Texto
+                Seleccionar Texto
               </button>
             </div>
           </div>
@@ -413,7 +407,7 @@ function buildShellHTML() {
             <!-- Floating X-Ray Magnifier Lens on Hover/Touch -->
             <div class="xray-lens-card" id="xray-lens-card" hidden>
               <div class="xray-lens-header">
-                <span>🔬 Lupa Rayos X cv2.Sobel</span>
+                <span>Lupa Rayos X cv2.Sobel</span>
                 <code id="xray-coord-label">(0, 0)</code>
               </div>
               <div class="xray-lens-body">
@@ -433,16 +427,16 @@ function buildShellHTML() {
             </div>
 
             <div class="coach-mark" id="coach-mark" hidden>
-              <div class="coach-row"><span class="coach-ico">👆</span> Pasa el cursor <em>(o toca)</em> la flor: lupa Rayos X + viento</div>
-              <div class="coach-row"><span class="coach-ico">💥</span> Clic en un pétalo = onda vectorial</div>
-              <div class="coach-row"><span class="coach-ico">↔</span> En modo 🌗 Cortina, arrastra el asa amarilla</div>
+              <div class="coach-row"><span class="coach-ico">1.</span> Pasa el cursor <em>(o toca)</em> la flor: lupa Rayos X + viento</div>
+              <div class="coach-row"><span class="coach-ico">2.</span> Clic en un pétalo = onda vectorial</div>
+              <div class="coach-row"><span class="coach-ico">3.</span> En modo Cortina, arrastra el asa amarilla ↔</div>
               <button type="button" class="btn btn-sm" id="btn-coach-dismiss">Entendido</button>
             </div>
 
             <div class="reference-pip" id="reference-pip" title="Haz clic para ampliar/reducir la foto original">
               <div class="reference-pip-header">
                 <span>Foto Original</span>
-                <span id="pip-toggle-label">🔍</span>
+                <span id="pip-toggle-label">+/-</span>
               </div>
               <canvas id="pip-canvas" aria-label="Miniatura de la imagen de referencia original"></canvas>
             </div>
@@ -451,7 +445,7 @@ function buildShellHTML() {
           <!-- MATHEMATICAL SOBEL CELL INSPECTOR HUD -->
           <div class="sobel-hud-bar" id="sobel-hud-bar">
             <div class="hud-metrics" id="hud-metrics-content">
-              <span class="hud-pill">✨ <strong>Interactivo:</strong> Mueve el cursor para crear viento y ver la Lupa Rayos X • Haz clic en la flor para lanzar una <strong>Onda Vectorial</strong></span>
+              <span class="hud-pill"><strong>Interactivo:</strong> Mueve el cursor para crear viento y ver la Lupa Rayos X • Haz clic en la flor para lanzar una <strong>Onda Vectorial</strong></span>
             </div>
             <div class="hud-metrics">
               <span class="hud-pill" id="pyodide-runtime-pill" hidden>
@@ -476,7 +470,7 @@ function buildShellHTML() {
                   id="btn-run-pyodide"
                   title="Ejecuta el script real con OpenCV (cv2.Sobel) compilado a WebAssembly mediante Pyodide"
                 >
-                  🐍 Ejecutar Python Real
+                  Ejecutar Python Real
                 </button>
                 <button
                   type="button"
@@ -488,13 +482,13 @@ function buildShellHTML() {
                 >
                   ▾ Ver 12 líneas
                 </button>
-                <button type="button" class="btn btn-sm sheet-close" data-close-sheet aria-label="Cerrar panel de código">✕</button>
+                <button type="button" class="btn btn-sm sheet-close" data-close-sheet aria-label="Cerrar panel de código">Cerrar</button>
               </div>
             </div>
 
             <!-- PLAIN-SPANISH TRANSLATION OF ACTIVE CODE LINE -->
             <div class="code-plain-explainer" id="code-plain-explainer">
-              <span class="explainer-icon">💡</span>
+              <span class="explainer-icon">Nota:</span>
               <span id="code-plain-explainer-text">
                 Haz clic en cualquier línea de código para ver qué hace en español sencillo y resaltar su efecto en la flor.
               </span>
@@ -512,8 +506,8 @@ function buildShellHTML() {
         <!-- RIGHT SIDEBAR: Image Source, Interactive Parameters & Sobel Kernel Matrices -->
         <aside class="controls-sidebar" id="controls-sidebar" aria-label="Ajustes del Pipeline cv2.Sobel">
           <div class="sheet-header">
-            <strong>🎛️ Ajustes cv2.Sobel</strong>
-            <button type="button" class="btn btn-sm sheet-close" data-close-sheet aria-label="Cerrar ajustes">✕</button>
+            <strong>Ajustes cv2.Sobel</strong>
+            <button type="button" class="btn btn-sm sheet-close" data-close-sheet aria-label="Cerrar ajustes">Cerrar</button>
           </div>
 
           <div class="panel-card">
@@ -523,14 +517,14 @@ function buildShellHTML() {
             </div>
             <div class="source-grid">
               <button type="button" class="source-btn active" data-source="photo" id="btn-src-photo">
-                🌺 Foto Estudio HD
+                Foto Estudio HD
               </button>
               <button type="button" class="source-btn" data-source="procedural" id="btn-src-procedural">
-                🎨 Flor Cinética 2D
+                Flor Cinética 2D
               </button>
             </div>
             <label class="upload-label" for="input-upload-image">
-              <span>📷 Subir otra flor / imagen...</span>
+              <span>Subir otra flor / imagen...</span>
               <input type="file" id="input-upload-image" accept="image/*" hidden />
             </label>
           </div>
@@ -631,13 +625,13 @@ function buildShellHTML() {
 
       <nav class="mobile-tabbar" id="mobile-tabbar" aria-label="Secciones">
         <button type="button" class="mobile-tab active" data-mobile-tab="escena" aria-pressed="true">
-          <span aria-hidden="true">🌺</span> Escena
+          Escena
         </button>
         <button type="button" class="mobile-tab" data-mobile-tab="ajustes" aria-pressed="false">
-          <span aria-hidden="true">🎛️</span> Ajustes
+          Ajustes
         </button>
         <button type="button" class="mobile-tab" data-mobile-tab="codigo" aria-pressed="false">
-          <span aria-hidden="true">🐍</span> Código
+          Código
         </button>
       </nav>
 
@@ -815,7 +809,7 @@ function updateStoryBannerUI() {
   const autoBtn = document.getElementById('btn-story-autoplay');
   if (autoBtn) {
     const playing = state.storyAutoCycle && state.choreography === 'story';
-    autoBtn.textContent = playing ? '⏸' : '▶';
+    autoBtn.textContent = playing ? 'Pausa' : 'Auto';
     autoBtn.setAttribute('aria-pressed', String(playing));
     autoBtn.setAttribute('aria-label', playing ? 'Pausar avance automático' : 'Reanudar avance automático');
   }
@@ -1184,21 +1178,21 @@ function drawAsciiGridToCanvas() {
     ctx.textBaseline = 'middle';
     if (splitX > padX + 95) {
       ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
-      ctx.fillRect(splitX - 90, padY + 10, 82, 22);
+      ctx.fillRect(splitX - 78, padY + 10, 70, 22);
       ctx.strokeStyle = 'rgba(250, 204, 46, 0.6)';
       ctx.lineWidth = 1;
-      ctx.strokeRect(splitX - 90, padY + 10, 82, 22);
+      ctx.strokeRect(splitX - 78, padY + 10, 70, 22);
       ctx.fillStyle = '#fde047';
-      ctx.fillText('📸 FOTO HD', splitX - 83, padY + 21);
+      ctx.fillText('FOTO HD', splitX - 68, padY + 21);
     }
     if (splitX < padX + innerW - 125) {
       ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
-      ctx.fillRect(splitX + 8, padY + 10, 112, 22);
+      ctx.fillRect(splitX + 8, padY + 10, 96, 22);
       ctx.strokeStyle = 'rgba(56, 189, 248, 0.6)';
       ctx.lineWidth = 1;
-      ctx.strokeRect(splitX + 8, padY + 10, 112, 22);
+      ctx.strokeRect(splitX + 8, padY + 10, 96, 22);
       ctx.fillStyle = '#38bdf8';
-      ctx.fillText('📐 ASCII Sobel', splitX + 15, padY + 21);
+      ctx.fillText('ASCII Sobel', splitX + 16, padY + 21);
     }
 
     // Tirador central circular (arrastrable siempre que la cortina esté visible)
@@ -1346,7 +1340,7 @@ function updateXRayMagnifierLens(cellInfo) {
   const displayColor = cell.char !== ' ' || cell.edgeChar !== ' ' ? `rgb(${cell.r}, ${cell.g}, ${cell.b})` : '#94a3b8';
 
   if (coordEl) {
-    coordEl.textContent = isPromptState ? '👆 Desliza sobre la flor' : `celda (${col}, ${row})`;
+    coordEl.textContent = isPromptState ? 'Desliza sobre la flor' : `celda (${col}, ${row})`;
   }
   if (arrowEl) {
     arrowEl.textContent = cell.arrowChar !== ' ' ? cell.arrowChar : '•';
@@ -1444,7 +1438,7 @@ function updateHoverHud(cellInfo) {
 
   if (!cellInfo) {
     hud.innerHTML = `
-      <span class="hud-pill">✨ <strong>Interactivo:</strong> Mueve el cursor o desliza el dedo para crear viento y ver la Lupa Rayos X • Toca la flor para lanzar una <strong>Onda Vectorial</strong></span>
+      <span class="hud-pill"><strong>Interactivo:</strong> Mueve el cursor o desliza el dedo para crear viento y ver la Lupa Rayos X • Toca la flor para lanzar una <strong>Onda Vectorial</strong></span>
     `;
     return;
   }
@@ -1667,7 +1661,7 @@ function setMotionPlaying(playing) {
   if (motionBtn) {
     motionBtn.classList.toggle('active', playing);
     motionBtn.setAttribute('aria-pressed', String(playing));
-    motionBtn.textContent = playing ? '🌺 Flor Viva' : '⏸️ Flor en pausa';
+    motionBtn.textContent = playing ? 'Flor Viva' : 'Flor en pausa';
   }
 }
 
@@ -1685,7 +1679,7 @@ function setChoreography(choreoKey) {
     state.storyAct = 5;
     state.storyActProgress = 1;
     if (!state.curtainHintSeen) {
-      showToast('↔ Arrastra el asa amarilla para comparar la foto con el arte ASCII', 3600);
+      showToast('Arrastra el asa amarilla ↔ para comparar la foto con el arte ASCII', 3600);
     }
   } else if (choreoKey === 'pulse') {
     state.storyAct = 5;
@@ -1855,7 +1849,7 @@ async function handleRunPyodide() {
   state.pyodideBusy = true;
   if (btn) {
     btn.disabled = true;
-    btn.textContent = isPyodideReady() ? '🐍 Ejecutando cv2.Sobel...' : '⏳ Cargando Pyodide + OpenCV...';
+    btn.textContent = isPyodideReady() ? 'Ejecutando cv2.Sobel...' : 'Cargando Pyodide + OpenCV...';
   }
 
   try {
@@ -1890,14 +1884,14 @@ async function handleRunPyodide() {
       renderSelectablePre();
     }
     flashCodeStages(['sobel_x', 'sobel_y', 'mag', 'angle', 'compose']);
-    showToast(`✓ Ejecutado en Python real (Pyodide + OpenCV WASM) en ${pyGrid.elapsedMs} ms`, 3600);
+    showToast(`Ejecutado en Python real (Pyodide + OpenCV WASM) en ${pyGrid.elapsedMs} ms`, 3600);
   } catch (err) {
     showToast(`Error en Pyodide: ${err.message || err}`, 4000);
   } finally {
     state.pyodideBusy = false;
     if (btn) {
       btn.disabled = false;
-      btn.textContent = '🐍 Ejecutar Python Real';
+      btn.textContent = 'Ejecutar Python Real';
     }
   }
 }
@@ -1920,11 +1914,11 @@ async function handleExportMedia(kind) {
         return { gridData, refCanvas };
       },
       pct => {
-        if (btn) btn.textContent = `⏳ ${label} ${pct}%`;
+        if (btn) btn.textContent = `${label} ${pct}%`;
         showToast(`Exportando ${label}... ${pct}%`, 0);
       }
     );
-    showToast(`✓ ${label} descargado correctamente`, 3200);
+    showToast(`${label} descargado correctamente`, 3200);
   } catch (err) {
     showToast(`Error al exportar: ${err.message || err}`, 4000);
   } finally {
@@ -1933,24 +1927,6 @@ async function handleExportMedia(kind) {
       btn.disabled = false;
       btn.innerHTML = origLabel;
     }
-  }
-}
-
-function handleRouteChange() {
-  const isVmLab = window.location.hash === '#/vm-lab';
-  const vmContainer = document.getElementById('vm-dashboard-view');
-  const studioContainer = document.getElementById('studio-view');
-  if (!vmContainer || !studioContainer) return;
-
-  if (isVmLab) {
-    state.motionPlaying = false;
-    studioContainer.hidden = true;
-    vmContainer.hidden = false;
-    renderVmDashboard(vmContainer);
-  } else {
-    vmContainer.hidden = true;
-    studioContainer.hidden = false;
-    drawAsciiGridToCanvas();
   }
 }
 
@@ -2005,7 +1981,6 @@ function maybeShowCoachMark() {
 }
 
 function bindEvents() {
-  window.addEventListener('hashchange', handleRouteChange);
   window.addEventListener('resize', () => {
     if (state.renderTarget === 'canvas' && !state.motionPlaying) {
       drawAsciiGridToCanvas();
@@ -2453,7 +2428,6 @@ function init() {
   syncChoreoButtons();
   bindEvents();
   loadPhotoPreset();
-  handleRouteChange();
   maybeShowCoachMark();
 }
 

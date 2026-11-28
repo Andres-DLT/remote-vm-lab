@@ -453,7 +453,7 @@ def format_live_code_panel(
     width = stats["cols"]
     divider = (
         f"\033[38;2;250;122;37m━━\033[0m "
-        f"\033[1;38;2;248;250;252m🐍 LIVE CODE: ave_del_paraiso_sobel.py\033[0m "
+        f"\033[1;38;2;248;250;252mLIVE CODE: ave_del_paraiso_sobel.py\033[0m "
         f"\033[38;2;148;163;184m│ cv2.Sobel(ksize={stats['ksize']}) "
         f"│ thresh={int(stats['threshold'])} │ bordes={stats['edge_ratio']}%\033[0m "
         f"\033[38;2;59;130;246m" + "━" * max(4, width - 78) + "\033[0m"
@@ -469,7 +469,7 @@ def format_live_code_panel(
 
     out = []
     if story_caption:
-        out.append(f" \033[48;2;28;25;23m\033[1;38;2;253;224;71m 💡 {story_caption} \033[0m")
+        out.append(f" \033[48;2;28;25;23m\033[1;38;2;253;224;71m {story_caption} \033[0m")
     out.append(divider)
     for idx in range(start, end):
         code_text, _stage = LIVE_CODE_LINES[idx]
@@ -528,11 +528,11 @@ def apply_breeze_distortion(img_bgr: np.ndarray, phase: float, bloom_factor: flo
 
 
 def inject_pollen_sparks_into_arrays(chars: np.ndarray, rgb: np.ndarray, phase: float) -> Tuple[np.ndarray, np.ndarray]:
-    """Añade partículas bioluminiscentes de polen ('✦', '*', '+', '·') flotando desde la cresta."""
+    """Añade partículas bioluminiscentes de polen ('*', '+', '·', '°') flotando desde la cresta."""
     rows, cols = chars.shape
     chars_out = chars.copy()
     rgb_out = rgb.copy()
-    spark_glyphs = ["✦", "*", "+", "·"]
+    spark_glyphs = ["*", "+", "·", "°"]
     spark_colors = [
         (255, 226, 102),  # Dorado polen
         (255, 136, 34),   # Naranja sépalo
@@ -656,7 +656,7 @@ def run_progressive_scan_animation(
                 spark_chars, spark_rgb = inject_pollen_sparks_into_arrays(arrays["chars"], arrays["rgb"], breeze_phase)
                 frame_buffer, _ = arrays_to_lines(spark_chars, spark_rgb)
                 stats = arrays["stats"]
-                caption = "PASO 4/4: ¡Flor Ave del Paraíso VIVA! Oscilación armónica + polen bioluminiscente (✦ * + ·)"
+                caption = "PASO 4/4: ¡Flor Ave del Paraíso VIVA! Oscilación armónica + polen bioluminiscente (* + · °)"
                 active_code_idx = len(LIVE_CODE_LINES) - 1
                 char_prog = 1.0
 
