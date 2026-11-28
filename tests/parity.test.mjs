@@ -99,6 +99,8 @@ for (const kernelKey of ['3', '5', 'scharr']) {
   }
 }
 
+import { readFileSync } from 'node:fs';
+
 for (const rampKey of Object.keys(CHAR_RAMPS)) {
   test(`Paridad JS vs Python para rampa de densidad "${rampKey}"`, () => {
     const base = snapshots.rgba_64;
@@ -116,3 +118,38 @@ for (const rampKey of Object.keys(CHAR_RAMPS)) {
     assert.equal(gridToPlainText(jsGrid), pySnap.plain);
   });
 }
+
+test('UX/UI: cabecera limpia con menú Exportar, barra unificada de escena, código plegable, lupa dinámica y pestañas móviles', () => {
+  const mainJs = readFileSync(new URL('../src/main.js', import.meta.url), 'utf-8');
+  const styleCss = readFileSync(new URL('../src/style.css', import.meta.url), 'utf-8');
+
+  // 1. Cabecera con menú desplegable Exportar y sin botones duplicados
+  assert.match(mainJs, /id="btn-export-menu"/);
+  assert.match(mainJs, /id="export-menu"/);
+  assert.doesNotMatch(mainJs, /id="btn-play-story"/);
+  assert.doesNotMatch(mainJs, /id="choreo-grid"/);
+
+  // 2. Barra única de escena con modos, transporte ⏮ ⏯ ⏭ y leyenda compacta
+  assert.match(mainJs, /id="stage-control-bar"/);
+  assert.match(mainJs, /id="btn-story-prev"/);
+  assert.match(mainJs, /id="btn-story-next"/);
+  assert.match(mainJs, /id="btn-story-autoplay"/);
+  assert.match(mainJs, /class="story-caption"/);
+
+  // 3. Código en vivo plegable (modo foco de 3 líneas vs 12 líneas)
+  assert.match(mainJs, /id="btn-toggle-code-focus"/);
+  assert.match(mainJs, /out-of-focus/);
+  assert.match(styleCss, /\.code-line\.out-of-focus/);
+
+  // 4. Lupa Rayos X que sigue al cursor y se acopla en móvil + separación de gestos cortina vs onda
+  assert.match(mainJs, /function positionXRayLens/);
+  assert.match(mainJs, /const isNearCurtainLine/);
+  assert.match(styleCss, /\.xray-lens-card\.is-docked/);
+  assert.match(styleCss, /\.ascii-canvas\.over-handle/);
+
+  // 5. Aviso de primera visita, pestañas móviles inferiores y prefers-reduced-motion
+  assert.match(mainJs, /id="coach-mark"/);
+  assert.match(mainJs, /id="mobile-tabbar"/);
+  assert.match(styleCss, /@media \(prefers-reduced-motion: reduce\)/);
+});
+

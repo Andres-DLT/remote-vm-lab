@@ -60,6 +60,23 @@ const STORY_ACTS = [
   }
 ];
 
+const CHOREO_CAPTIONS = {
+  bloom: {
+    badge: 'MODO FLORACIÓN',
+    title: 'La flor abre y cierra sus sépalos mientras suelta polen ASCII',
+    subtitle: 'Mueve el cursor para soplar viento sobre los pétalos; haz clic en uno para lanzar una onda vectorial.'
+  },
+  curtain: {
+    badge: 'MODO CORTINA',
+    title: 'Izquierda: foto real · Derecha: lo que ve cv2.Sobel. Arrastra el asa ↔',
+    subtitle: 'Arrastra el asa amarilla ↔ para comparar; un clic fuera del asa lanza una onda vectorial.'
+  },
+  pulse: {
+    badge: 'MODO PULSO',
+    title: 'Un pulso de luz recorre solo los bordes detectados por cv2.Sobel',
+    subtitle: 'Los anillos iluminan los contornos (/ | \\ -) para que se vea qué celdas son borde y cuáles relleno.'
+  }
+};
 const state = {
   sourceType: 'photo', // 'photo' | 'procedural' | 'upload'
   viewMode: 'combined', // 'combined' | 'edges' | 'vectors' | 'magnitude'
@@ -102,6 +119,12 @@ const state = {
   // Live code dock state
   activeCodeLine: 0, // 0..11
   flashedStages: new Set(),
+  codeFocus: false, // true = solo la línea activa ±1 (pantallas compactas)
+
+  // UX state
+  mobileTab: 'escena', // 'escena' | 'ajustes' | 'codigo'
+  lastPointer: null, // { clientX, clientY, isTouch }
+  curtainHintSeen: false,
 
   // Pyodide WebAssembly state
   pyodideBusy: false,
@@ -129,10 +152,33 @@ let proceduralCroppedCanvas = null;
 
 // Duración de cada acto en el Modo Historia automático (ms)
 const ACT_DURATIONS_MS = [2900, 2900, 2900, 3200, 6500];
+const CURTAIN_HANDLE_RADIUS = 16;
+const CURTAIN_GRAB_TOLERANCE_PX = 22; // zona de agarre alrededor de la línea de la cortina
+const ONBOARDING_STORAGE_KEY = 'ave-sobel-onboarding-v1';
+const CURTAIN_HINT_STORAGE_KEY = 'ave-sobel-curtain-hint-v1';
+
+function safeStorageGet(key) {
+  try {
+    return window.localStorage?.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeStorageSet(key, value) {
+  try {
+    window.localStorage?.setItem(key, value);
+  } catch {
+    /* almacenamiento no disponible (modo privado): ignorar */
+  }
+}
 
 function prefersReducedMotion() {
   return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 }
+
+// Movimiento reducido: menos polen, sin viento del cursor, sin ráfagas y animación más lenta
+let reducedMotion = prefersReducedMotion();
 
 function initPollenParticles(count = 28) {
   const glyphs = ['✦', '*', '+', '·', '°'];
@@ -202,70 +248,127 @@ function buildShellHTML() {
         </div>
 
         <div class="header-actions">
-          <button type="button" class="btn btn-primary" id="btn-play-story" title="Reproducir explicación visual en 5 pasos">
-            🎬 Historia Explicada (5 Pasos)
-          </button>
-          <button type="button" class="btn btn-breeze active" id="btn-toggle-motion" title="Activar/Pausar movimiento orgánico continuo">
-            🌺 Flor Viva: ACTIVA
-          </button>
-          <button type="button" class="btn" id="btn-toggle-curtain" title="Comparar Foto Original HD vs Arte ASCII con una cortina interactiva">
-            🌗 Cortina Foto ↔ ASCII
-          </button>
-          <button type="button" class="btn btn-vertical" id="btn-toggle-framing">
-            📱 Vista Vertical 9:16
-          </button>
-          <button type="button" class="btn" id="btn-export-webm" title="Grabar la historia completa en video WebM 9:16">
-            🎥 Exportar WebM
-          </button>
-          <button type="button" class="btn" id="btn-export-gif" title="Exportar la historia completa en GIF animado 9:16">
-            🎞️ Exportar GIF
-          </button>
-          <button type="button" class="btn" id="btn-copy-ascii">
-            📋 Copiar ASCII
-          </button>
-          <a
-            class="btn"
-            id="btn-download-py"
-            href="./ave_del_paraiso_sobel.py"
-            download="ave_del_paraiso_sobel.py"
+          <button
+            type="button"
+            class="btn btn-breeze active"
+            id="btn-toggle-motion"
+            aria-pressed="true"
+            title="Activar/Pausar todo el movimiento de la flor"
           >
-            🐍 Descargar .py
-          </a>
-          <a class="btn btn-vm-lab" id="btn-open-vm-lab" href="#/vm-lab" title="Abrir el panel original Remote VM Lab">
-            🖥️ VM Lab
-          </a>
+            🌺 Flor Viva
+          </button>
+          <button type="button" class="btn btn-vertical" id="btn-toggle-framing" aria-pressed="false" title="Encuadre vertical 9:16 para móvil y redes">
+            📱 9:16
+          </button>
+
+          <div class="menu-wrap" id="export-menu-wrap">
+            <button
+              type="button"
+              class="btn btn-primary"
+              id="btn-export-menu"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-controls="export-menu"
+            >
+              📤 Exportar <span class="menu-caret" aria-hidden="true">▾</span>
+            </button>
+            <div class="menu-popover" id="export-menu" role="menu" hidden>
+              <div class="menu-section-label">Video vertical 9:16</div>
+              <button type="button" class="menu-item" role="menuitem" id="btn-export-webm">
+                🎥 Grabar video WebM <small>historia completa</small>
+              </button>
+              <button type="button" class="menu-item" role="menuitem" id="btn-export-gif">
+                🎞️ Exportar GIF animado <small>432×768</small>
+              </button>
+              <div class="menu-section-label">Copiar</div>
+              <button type="button" class="menu-item" role="menuitem" id="btn-copy-ascii">
+                📋 Arte ASCII (texto plano)
+              </button>
+              <button type="button" class="menu-item" role="menuitem" id="btn-copy-ansi">
+                🎨 ASCII con color ANSI <small>para terminal</small>
+              </button>
+              <button type="button" class="menu-item" role="menuitem" id="btn-copy-python">
+                📝 Script Python <small>con tus parámetros</small>
+              </button>
+              <div class="menu-section-label">Descargar</div>
+              <a
+                class="menu-item"
+                role="menuitem"
+                id="btn-download-py"
+                href="./ave_del_paraiso_sobel.py"
+                download="ave_del_paraiso_sobel.py"
+              >
+                🐍 ave_del_paraiso_sobel.py
+              </a>
+              <div class="menu-divider" role="separator"></div>
+              <a class="menu-item" role="menuitem" id="btn-open-vm-lab" href="#/vm-lab">
+                🖥️ Abrir Remote VM Lab
+              </a>
+            </div>
+          </div>
         </div>
       </header>
 
-      <main class="studio-workspace" id="studio-workspace">
+      <main class="studio-workspace" id="studio-workspace" data-mobile-tab="escena">
         <!-- LEFT / MAIN: Split Stage (Story Explainer + Top ASCII Flower + Bottom Live Python Code) -->
-        <section class="sobel-split-stage" aria-label="Terminal de Arte ASCII y Código en Vivo">
-          <!-- INTERACTIVE 5-STEP STORY STEPPER (Solves "no le entienden") -->
-          <div class="story-guide-bar" id="story-guide-bar">
-            <div class="story-steps-pills" role="tablist" aria-label="Pasos de cómo funciona cv2.Sobel">
-              ${STORY_ACTS.map(
-                s => `
-                <button
-                  type="button"
-                  class="story-step-pill ${s.act === 1 ? 'active' : ''}"
-                  data-story-act="${s.act}"
-                  id="btn-story-act-${s.act}"
-                >
-                  ${s.shortLabel}
-                </button>
-              `
-              ).join('')}
+        <section class="sobel-split-stage" id="sobel-split-stage" aria-label="Terminal de Arte ASCII y Código en Vivo">
+          <!-- UNIFIED STAGE CONTROL BAR: choreography + story steps + playback -->
+          <div class="stage-control-bar" id="stage-control-bar">
+            <div class="choreo-segment" role="radiogroup" aria-label="Modo de animación">
+              <button type="button" class="seg-btn active" data-choreo="story" role="radio" aria-checked="true" title="Explicación guiada en 5 pasos">
+                🎬 <span class="seg-label">Historia</span>
+              </button>
+              <button type="button" class="seg-btn" data-choreo="bloom" role="radio" aria-checked="false" title="Floración cinética + polen">
+                🌺 <span class="seg-label">Floración</span>
+              </button>
+              <button type="button" class="seg-btn" data-choreo="curtain" role="radio" aria-checked="false" title="Compara Foto real ↔ Arte ASCII arrastrando ↔">
+                🌗 <span class="seg-label">Cortina</span>
+              </button>
+              <button type="button" class="seg-btn" data-choreo="pulse" role="radio" aria-checked="false" title="Pulso bioluminiscente por las nervaduras">
+                ⚡ <span class="seg-label">Pulso</span>
+              </button>
             </div>
 
-            <div class="story-explainer-banner" id="story-explainer-banner">
-              <div class="story-explainer-text">
-                <span class="story-badge" id="story-banner-badge">${STORY_ACTS[0].badge}</span>
-                <strong class="story-title" id="story-banner-title">${STORY_ACTS[0].title}</strong>
-                <p class="story-subtitle" id="story-banner-subtitle">${STORY_ACTS[0].subtitle}</p>
+            <div class="story-transport" id="story-transport">
+              <button type="button" class="icon-btn" id="btn-story-prev" aria-label="Paso anterior" title="Paso anterior">⏮</button>
+              <div class="story-steps-pills" role="tablist" aria-label="Pasos de cómo funciona cv2.Sobel">
+                ${STORY_ACTS.map(
+                  s => `
+                  <button
+                    type="button"
+                    class="story-step-pill ${s.act === 1 ? 'active' : ''}"
+                    data-story-act="${s.act}"
+                    id="btn-story-act-${s.act}"
+                    role="tab"
+                    aria-selected="${s.act === 1}"
+                    title="${s.shortLabel}"
+                  >
+                    <span class="pill-num">${s.act}</span><span class="pill-text">${s.shortLabel.replace(/^\d+\.\s*/, '')}</span>
+                  </button>
+                `
+                ).join('')}
               </div>
-              <div class="story-progress-track">
-                <div class="story-progress-fill" id="story-progress-fill" style="width: 15%"></div>
-              </div>
+              <button type="button" class="icon-btn" id="btn-story-next" aria-label="Paso siguiente" title="Paso siguiente">⏭</button>
+              <button
+                type="button"
+                class="icon-btn icon-btn-accent"
+                id="btn-story-autoplay"
+                aria-label="Pausar avance automático"
+                aria-pressed="true"
+                title="Pausar / reanudar el avance automático de pasos"
+              >⏸</button>
+            </div>
+
+            <button type="button" class="icon-btn" id="btn-trigger-shockwave" aria-label="Lanzar onda de choque vectorial" title="Lanzar onda de choque vectorial">💥</button>
+          </div>
+
+          <!-- ONE-LINE STORY CAPTION -->
+          <div class="story-caption" id="story-explainer-banner" aria-live="polite">
+            <span class="story-badge" id="story-banner-badge">${STORY_ACTS[0].badge}</span>
+            <strong class="story-title" id="story-banner-title">${STORY_ACTS[0].title}</strong>
+            <p class="story-subtitle" id="story-banner-subtitle">${STORY_ACTS[0].subtitle}</p>
+            <div class="story-progress-track" aria-hidden="true">
+              <div class="story-progress-fill" id="story-progress-fill" style="width: 15%"></div>
             </div>
           </div>
 
@@ -329,6 +432,13 @@ function buildShellHTML() {
               </div>
             </div>
 
+            <div class="coach-mark" id="coach-mark" hidden>
+              <div class="coach-row"><span class="coach-ico">👆</span> Pasa el cursor <em>(o toca)</em> la flor: lupa Rayos X + viento</div>
+              <div class="coach-row"><span class="coach-ico">💥</span> Clic en un pétalo = onda vectorial</div>
+              <div class="coach-row"><span class="coach-ico">↔</span> En modo 🌗 Cortina, arrastra el asa amarilla</div>
+              <button type="button" class="btn btn-sm" id="btn-coach-dismiss">Entendido</button>
+            </div>
+
             <div class="reference-pip" id="reference-pip" title="Haz clic para ampliar/reducir la foto original">
               <div class="reference-pip-header">
                 <span>Foto Original</span>
@@ -366,14 +476,19 @@ function buildShellHTML() {
                   id="btn-run-pyodide"
                   title="Ejecuta el script real con OpenCV (cv2.Sobel) compilado a WebAssembly mediante Pyodide"
                 >
-                  🐍 Ejecutar Python Real (Pyodide)
+                  🐍 Ejecutar Python Real
                 </button>
-                <button type="button" class="btn btn-sm" id="btn-copy-python">
-                  📋 Copiar Script Python
+                <button
+                  type="button"
+                  class="btn btn-sm"
+                  id="btn-toggle-code-focus"
+                  aria-pressed="false"
+                  aria-controls="live-code-lines"
+                  title="Alternar entre ver solo la línea activa o las 12 líneas"
+                >
+                  ▾ Ver 12 líneas
                 </button>
-                <button type="button" class="btn btn-sm" id="btn-copy-ansi">
-                  🎨 Copiar ANSI (Terminal)
-                </button>
+                <button type="button" class="btn btn-sm sheet-close" data-close-sheet aria-label="Cerrar panel de código">✕</button>
               </div>
             </div>
 
@@ -394,30 +509,11 @@ function buildShellHTML() {
           </div>
         </section>
 
-        <!-- RIGHT SIDEBAR: Choreography, Interactive Parameters & Sobel Kernel Matrices -->
-        <aside class="controls-sidebar" aria-label="Controles del Pipeline cv2.Sobel">
-          <div class="panel-card">
-            <div class="panel-heading">
-              <h2>Coreografía Visual</h2>
-              <span class="panel-tag">En Vivo</span>
-            </div>
-            <div class="choreo-grid" id="choreo-grid">
-              <button type="button" class="source-btn active" data-choreo="story">
-                🎬 Historia 5 Pasos
-              </button>
-              <button type="button" class="source-btn" data-choreo="bloom">
-                🌺 Floración + Polen
-              </button>
-              <button type="button" class="source-btn" data-choreo="curtain">
-                🌗 Cortina Foto↔ASCII
-              </button>
-              <button type="button" class="source-btn" data-choreo="pulse">
-                ⚡ Pulso Bioluminiscente
-              </button>
-            </div>
-            <button type="button" class="btn" id="btn-trigger-shockwave" style="width: 100%; justify-content: center; margin-top: 6px;">
-              💥 Lanzar Onda de Choque Vectorial
-            </button>
+        <!-- RIGHT SIDEBAR: Image Source, Interactive Parameters & Sobel Kernel Matrices -->
+        <aside class="controls-sidebar" id="controls-sidebar" aria-label="Ajustes del Pipeline cv2.Sobel">
+          <div class="sheet-header">
+            <strong>🎛️ Ajustes cv2.Sobel</strong>
+            <button type="button" class="btn btn-sm sheet-close" data-close-sheet aria-label="Cerrar ajustes">✕</button>
           </div>
 
           <div class="panel-card">
@@ -532,6 +628,18 @@ function buildShellHTML() {
           </div>
         </aside>
       </main>
+
+      <nav class="mobile-tabbar" id="mobile-tabbar" aria-label="Secciones">
+        <button type="button" class="mobile-tab active" data-mobile-tab="escena" aria-pressed="true">
+          <span aria-hidden="true">🌺</span> Escena
+        </button>
+        <button type="button" class="mobile-tab" data-mobile-tab="ajustes" aria-pressed="false">
+          <span aria-hidden="true">🎛️</span> Ajustes
+        </button>
+        <button type="button" class="mobile-tab" data-mobile-tab="codigo" aria-pressed="false">
+          <span aria-hidden="true">🐍</span> Código
+        </button>
+      </nav>
 
       <div class="toast-msg" id="toast-msg" role="status" aria-live="polite"></div>
     </div>
@@ -690,27 +798,60 @@ function buildCliCommandText() {
   return `--width ${state.cols} --threshold ${state.edgeThreshold}${kFlag} --saturation ${state.saturationBoost}${cFlag}${rFlag}${mFlag}`;
 }
 
+let lastStoryActRendered = 0;
 function updateStoryBannerUI() {
   const actObj = STORY_ACTS[Math.max(0, Math.min(4, state.storyAct - 1))];
   const progPct = Math.round(((state.storyAct - 1 + state.storyActProgress) / 5) * 100);
-  const sig = `${state.storyAct}|${progPct}`;
+  const sig = `${state.storyAct}|${progPct}|${state.choreography}|${state.storyAutoCycle}`;
   if (sig === lastStoryBannerSig) return;
   lastStoryBannerSig = sig;
 
+  const fillEl = document.getElementById('story-progress-fill');
+  if (fillEl) fillEl.style.width = `${Math.max(6, Math.min(100, progPct))}%`;
+
+  const bar = document.getElementById('stage-control-bar');
+  if (bar) bar.classList.toggle('is-story', state.choreography === 'story');
+
+  const autoBtn = document.getElementById('btn-story-autoplay');
+  if (autoBtn) {
+    const playing = state.storyAutoCycle && state.choreography === 'story';
+    autoBtn.textContent = playing ? '⏸' : '▶';
+    autoBtn.setAttribute('aria-pressed', String(playing));
+    autoBtn.setAttribute('aria-label', playing ? 'Pausar avance automático' : 'Reanudar avance automático');
+  }
+
+  const captionKey = state.choreography === 'story' ? `story-${state.storyAct}` : state.choreography;
+  if (captionKey === lastStoryActRendered) return;
+  lastStoryActRendered = captionKey;
+
   document.querySelectorAll('[data-story-act]').forEach(btn => {
-    const actNum = Number(btn.getAttribute('data-story-act'));
-    btn.classList.toggle('active', actNum === state.storyAct);
+    const isActive = Number(btn.getAttribute('data-story-act')) === state.storyAct;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', String(isActive));
   });
 
+  const caption = state.choreography === 'story' ? actObj : CHOREO_CAPTIONS[state.choreography] || actObj;
   const badgeEl = document.getElementById('story-banner-badge');
   const titleEl = document.getElementById('story-banner-title');
   const subEl = document.getElementById('story-banner-subtitle');
-  const fillEl = document.getElementById('story-progress-fill');
+  if (badgeEl) badgeEl.textContent = caption.badge.replace(/\s•.*$/, '');
+  if (titleEl) {
+    titleEl.textContent = caption.title;
+    titleEl.title = caption.subtitle;
+  }
+  if (subEl) subEl.textContent = caption.subtitle;
+}
 
-  if (badgeEl) badgeEl.textContent = actObj.badge;
-  if (titleEl) titleEl.textContent = actObj.title;
-  if (subEl) subEl.textContent = actObj.subtitle;
-  if (fillEl) fillEl.style.width = `${Math.max(6, Math.min(100, progPct))}%`;
+function syncChoreoButtons() {
+  document.querySelectorAll('[data-choreo]').forEach(btn => {
+    const isActive = btn.getAttribute('data-choreo') === state.choreography;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-checked', String(isActive));
+  });
+  const wrapper = document.getElementById('ascii-viewport-wrapper');
+  if (wrapper) wrapper.classList.toggle('curtain-mode', state.choreography === 'curtain');
+  lastStoryBannerSig = '';
+  updateStoryBannerUI();
 }
 
 function renderLiveCodeDock(force = false) {
@@ -719,7 +860,7 @@ function renderLiveCodeDock(force = false) {
 
   const rows = state.gridData ? state.gridData.rows : 53;
   const flashedKey = Array.from(state.flashedStages).sort().join(',');
-  const sig = `${state.sourceType}|${state.cols}x${rows}|${state.edgeThreshold}|${state.kernelKey}|${state.saturationBoost}|${state.contrastBoost}|${state.rampKey}|${state.viewMode}|${state.activeCodeLine}|${flashedKey}`;
+  const sig = `${state.sourceType}|${state.cols}x${rows}|${state.edgeThreshold}|${state.kernelKey}|${state.saturationBoost}|${state.contrastBoost}|${state.rampKey}|${state.viewMode}|${state.activeCodeLine}|${flashedKey}|${state.codeFocus}`;
 
   if (!force && sig === lastCodeDockSig) return;
   lastCodeDockSig = sig;
@@ -732,13 +873,15 @@ function renderLiveCodeDock(force = false) {
     explainerTextEl.innerHTML = `<strong>Línea ${activeLineObj.num} (${activeLineObj.badge}):</strong> ${activeLineObj.explain}`;
   }
 
+  container.classList.toggle('is-focus', state.codeFocus);
   container.innerHTML = lines
     .map((line, idx) => {
       const isActive = idx === state.activeCodeLine;
       const isFlashed = state.flashedStages.has(line.stage);
+      const isOutOfFocus = state.codeFocus && Math.abs(idx - state.activeCodeLine) > 1;
       return `
         <div
-          class="code-line ${isActive ? 'active-step' : ''} ${isFlashed ? 'param-flash' : ''}"
+          class="code-line ${isActive ? 'active-step' : ''} ${isFlashed ? 'param-flash' : ''} ${isOutOfFocus ? 'out-of-focus' : ''}"
           data-code-idx="${idx}"
           data-stage="${line.stage}"
         >
@@ -786,6 +929,20 @@ function computeEffectiveCurtainRatio() {
   return 0;
 }
 
+function isCompactLayout() {
+  return window.matchMedia?.('(max-width: 1080px)').matches;
+}
+
+// Altura disponible para el lienzo ASCII: en escritorio reservamos espacio para cabecera,
+// barra de escena, HUD y el código en modo foco; en móvil dejamos ~mitad de pantalla
+// libre para el panel inferior (Ajustes / Código).
+function computeAvailableCanvasHeight() {
+  const vh = window.innerHeight || 900;
+  if (state.verticalFraming) return Math.max(420, vh - 120);
+  if (isCompactLayout()) return Math.max(240, vh * 0.5);
+  return Math.max(320, vh - 400);
+}
+
 function drawAsciiGridToCanvas() {
   if (!state.gridData) return;
   const { grid, cols, rows } = state.gridData;
@@ -799,7 +956,9 @@ function drawAsciiGridToCanvas() {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const defaultCharW = cols > 110 ? 7.2 : cols > 85 ? 8.6 : 10.2;
   const maxFitCharW = Math.max(3.8, (availW - 20) / cols);
-  const baseCharW = Math.min(defaultCharW, maxFitCharW);
+  const availH = computeAvailableCanvasHeight();
+  const maxFitByHeight = Math.max(3.6, (availH - 20) / rows / 1.92);
+  const baseCharW = Math.min(defaultCharW, maxFitCharW, maxFitByHeight);
   const baseCharH = baseCharW * 1.92;
 
   const logicalW = Math.ceil(cols * baseCharW + 20);
@@ -1027,21 +1186,32 @@ function drawAsciiGridToCanvas() {
       ctx.fillText('📐 ASCII Sobel', splitX + 15, padY + 21);
     }
 
-    // Tirador central circular
+    // Tirador central circular (arrastrable siempre que la cortina esté visible)
     const handleY = padY + innerH * 0.5;
+    const handleR = CURTAIN_HANDLE_RADIUS;
+    if (!state.curtainHintSeen && (state.choreography === 'curtain' || state.curtainEnabled)) {
+      const pulseT = (performance.now() % 1400) / 1400;
+      ctx.beginPath();
+      ctx.arc(splitX, handleY, handleR + 4 + pulseT * 16, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(250, 204, 21, ${(0.75 * (1 - pulseT)).toFixed(2)})`;
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+    }
     ctx.beginPath();
-    ctx.arc(splitX, handleY, 13, 0, Math.PI * 2);
-    ctx.fillStyle = '#0f172a';
+    ctx.arc(splitX, handleY, handleR, 0, Math.PI * 2);
+    ctx.fillStyle = state.isDraggingCurtain ? '#facc15' : '#0f172a';
     ctx.fill();
     ctx.strokeStyle = '#facc15';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2.2;
     ctx.stroke();
-    ctx.fillStyle = '#fde047';
-    ctx.font = '700 11px "JetBrains Mono", monospace';
+    ctx.fillStyle = state.isDraggingCurtain ? '#0f172a' : '#fde047';
+    ctx.font = '800 14px "JetBrains Mono", monospace';
     ctx.textAlign = 'center';
     ctx.fillText('↔', splitX, handleY + 0.5);
     ctx.textAlign = 'start';
   }
+  canvas.dataset.splitX = String(splitX > padX + 4 && splitX < padX + innerW - 4 ? splitX : -1);
+  canvas.dataset.handleY = String(padY + innerH * 0.5);
 
   // Retícula de inspección del kernel Sobel al pasar el cursor
   if (state.hoveredCell) {
@@ -1066,6 +1236,36 @@ function drawAsciiGridToCanvas() {
   canvas.dataset.padY = String(padY);
 }
 
+function positionXRayLens(card) {
+  const wrapper = document.getElementById('ascii-viewport-wrapper');
+  const p = state.lastPointer;
+  const shouldDock = !p || p.isTouch || window.matchMedia?.('(max-width: 720px)').matches;
+  card.classList.toggle('is-docked', Boolean(shouldDock));
+  if (shouldDock || !wrapper) {
+    card.style.left = '';
+    card.style.top = '';
+    return;
+  }
+
+  const wRect = wrapper.getBoundingClientRect();
+  const cardW = card.offsetWidth || 248;
+  const cardH = card.offsetHeight || 120;
+  const gap = 22;
+  const px = p.clientX - wRect.left;
+  const py = p.clientY - wRect.top;
+
+  // Por defecto a la derecha y abajo del cursor; si no cabe, cambia de lado
+  let left = px + gap;
+  if (left + cardW > wRect.width - 8) left = px - gap - cardW;
+  let top = py + gap;
+  if (top + cardH > wRect.height - 8) top = py - gap - cardH;
+
+  left = Math.max(8, Math.min(wRect.width - cardW - 8, left));
+  top = Math.max(8, Math.min(wRect.height - cardH - 8, top));
+  card.style.left = `${Math.round(left)}px`;
+  card.style.top = `${Math.round(top)}px`;
+}
+
 function updateXRayMagnifierLens(cellInfo) {
   const card = document.getElementById('xray-lens-card');
   if (!card) return;
@@ -1076,6 +1276,7 @@ function updateXRayMagnifierLens(cellInfo) {
   }
 
   card.hidden = false;
+  positionXRayLens(card);
   const { col, row, cell } = cellInfo;
   const coordEl = document.getElementById('xray-coord-label');
   const arrowEl = document.getElementById('xray-arrow-char');
@@ -1309,7 +1510,7 @@ function startAnimationLoop() {
     lastTickTime = now;
 
     if (state.motionPlaying && state.renderTarget === 'canvas') {
-      state.phase += dt * 0.0032;
+      state.phase += dt * (reducedMotion ? 0.0011 : 0.0032);
 
       // Avance automático por los 5 pasos del Modo Historia
       if (state.choreography === 'story' && state.storyAutoCycle) {
@@ -1357,6 +1558,7 @@ function startAnimationLoop() {
 
 function selectStoryAct(actNum, autoCycle = false) {
   state.choreography = 'story';
+  state.curtainEnabled = false;
   state.storyAct = Math.max(1, Math.min(5, actNum));
   state.storyActProgress = autoCycle ? 0.02 : 0.72;
   state.storyAutoCycle = autoCycle;
@@ -1367,11 +1569,7 @@ function selectStoryAct(actNum, autoCycle = false) {
     state.activeCodeLine = actMeta.codeLine;
   }
 
-  document.querySelectorAll('[data-choreo]').forEach(btn => {
-    btn.classList.toggle('active', btn.getAttribute('data-choreo') === 'story');
-  });
-
-  updateStoryBannerUI();
+  syncChoreoButtons();
   renderLiveCodeDock(true);
 
   if (state.renderTarget !== 'canvas') {
@@ -1384,45 +1582,44 @@ function selectStoryAct(actNum, autoCycle = false) {
   }
 }
 
+function stepStory(delta) {
+  const next = ((state.storyAct - 1 + delta + 5) % 5) + 1;
+  selectStoryAct(next, false);
+}
+
+function setMotionPlaying(playing) {
+  state.motionPlaying = playing;
+  const motionBtn = document.getElementById('btn-toggle-motion');
+  if (motionBtn) {
+    motionBtn.classList.toggle('active', playing);
+    motionBtn.setAttribute('aria-pressed', String(playing));
+    motionBtn.textContent = playing ? '🌺 Flor Viva' : '⏸️ Flor en pausa';
+  }
+}
+
 function setChoreography(choreoKey) {
   state.choreography = choreoKey;
-  document.querySelectorAll('[data-choreo]').forEach(btn => {
-    btn.classList.toggle('active', btn.getAttribute('data-choreo') === choreoKey);
-  });
+  state.curtainEnabled = false; // la cortina arranca en barrido automático hasta que se arrastra el asa
+  syncChoreoButtons();
 
   if (choreoKey === 'story') {
     selectStoryAct(1, true);
-    showToast('🎬 Modo Historia 5 Pasos: explicando cv2.Sobel en vivo');
   } else if (choreoKey === 'bloom') {
     state.storyAct = 5;
     state.storyActProgress = 1;
-    state.curtainEnabled = false;
-    document.getElementById('btn-toggle-curtain')?.classList.remove('active');
-    updateStoryBannerUI();
-    showToast('🌺 Floración Cinética: apertura de sépalos + polen bioluminiscente');
   } else if (choreoKey === 'curtain') {
     state.storyAct = 5;
     state.storyActProgress = 1;
-    updateStoryBannerUI();
-    showToast('🌗 Cortina Rayos X: arrastra la línea amarilla o mira la comparación Foto ↔ ASCII');
+    if (!state.curtainHintSeen) {
+      showToast('↔ Arrastra el asa amarilla para comparar la foto con el arte ASCII', 3600);
+    }
   } else if (choreoKey === 'pulse') {
     state.storyAct = 5;
     state.storyActProgress = 1;
-    state.curtainEnabled = false;
-    document.getElementById('btn-toggle-curtain')?.classList.remove('active');
-    updateStoryBannerUI();
     triggerRadialShockwave();
-    showToast('⚡ Pulso Bioluminiscente en Nervaduras + Ondas Vectoriales');
   }
 
-  if (!state.motionPlaying) {
-    state.motionPlaying = true;
-    const motionBtn = document.getElementById('btn-toggle-motion');
-    if (motionBtn) {
-      motionBtn.classList.add('active');
-      motionBtn.textContent = '🌺 Flor Viva: ACTIVA';
-    }
-  }
+  if (!state.motionPlaying) setMotionPlaying(true);
   startAnimationLoop();
 }
 
@@ -1436,7 +1633,7 @@ function triggerRadialShockwave(colOverride = null, rowOverride = null) {
     radius: 1,
     maxRadius: Math.hypot(state.gridData.cols, state.gridData.rows) * 0.85
   });
-  spawnPollenBurst(col / state.gridData.cols, row / state.gridData.rows, 9);
+  if (!reducedMotion) spawnPollenBurst(col / state.gridData.cols, row / state.gridData.rows, 9);
   if (!animFrameId) startAnimationLoop();
 }
 
@@ -1626,7 +1823,7 @@ async function handleRunPyodide() {
     state.pyodideBusy = false;
     if (btn) {
       btn.disabled = false;
-      btn.textContent = '🐍 Ejecutar Python Real (Pyodide)';
+      btn.textContent = '🐍 Ejecutar Python Real';
     }
   }
 }
@@ -1634,9 +1831,8 @@ async function handleRunPyodide() {
 async function handleExportMedia(kind) {
   if (state.exportBusy || !state.sourceCanvas) return;
   state.exportBusy = true;
-  const btnId = kind === 'webm' ? 'btn-export-webm' : 'btn-export-gif';
-  const btn = document.getElementById(btnId);
-  const origLabel = btn?.textContent || '';
+  const btn = document.getElementById('btn-export-menu');
+  const origLabel = btn?.innerHTML || '';
   if (btn) btn.disabled = true;
 
   try {
@@ -1650,7 +1846,7 @@ async function handleExportMedia(kind) {
         return { gridData, refCanvas };
       },
       pct => {
-        if (btn) btn.textContent = `⏳ ${pct}%`;
+        if (btn) btn.textContent = `⏳ ${label} ${pct}%`;
         showToast(`Exportando ${label}... ${pct}%`, 0);
       }
     );
@@ -1661,7 +1857,7 @@ async function handleExportMedia(kind) {
     state.exportBusy = false;
     if (btn) {
       btn.disabled = false;
-      btn.textContent = origLabel;
+      btn.innerHTML = origLabel;
     }
   }
 }
@@ -1684,6 +1880,55 @@ function handleRouteChange() {
   }
 }
 
+function setExportMenuOpen(open) {
+  const menu = document.getElementById('export-menu');
+  const btn = document.getElementById('btn-export-menu');
+  if (!menu || !btn) return;
+  menu.hidden = !open;
+  btn.setAttribute('aria-expanded', String(open));
+  if (open) menu.querySelector('.menu-item')?.focus();
+}
+
+function setCodeFocus(focus) {
+  state.codeFocus = focus;
+  const btn = document.getElementById('btn-toggle-code-focus');
+  if (btn) {
+    btn.textContent = focus ? '▾ Ver 12 líneas' : '▴ Solo línea activa';
+    btn.setAttribute('aria-pressed', String(!focus));
+  }
+  renderLiveCodeDock(true);
+}
+
+function setMobileTab(tab) {
+  state.mobileTab = tab;
+  const workspace = document.getElementById('studio-workspace');
+  if (workspace) workspace.dataset.mobileTab = tab;
+  document.querySelectorAll('.mobile-tab[data-mobile-tab]').forEach(btn => {
+    const isActive = btn.getAttribute('data-mobile-tab') === tab;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
+  });
+  if (tab !== 'escena' && isCompactLayout()) {
+    // Lleva la flor arriba para que se vea mientras se ajusta en el panel inferior
+    document.getElementById('ascii-viewport-wrapper')?.scrollIntoView({ block: 'start', behavior: reducedMotion ? 'auto' : 'smooth' });
+  }
+}
+
+function dismissCoachMark() {
+  const coach = document.getElementById('coach-mark');
+  if (!coach || coach.hidden) return;
+  coach.hidden = true;
+  safeStorageSet(ONBOARDING_STORAGE_KEY, '1');
+}
+
+function maybeShowCoachMark() {
+  if (safeStorageGet(ONBOARDING_STORAGE_KEY)) return;
+  const coach = document.getElementById('coach-mark');
+  if (!coach) return;
+  coach.hidden = false;
+  setTimeout(dismissCoachMark, 6500);
+}
+
 function bindEvents() {
   window.addEventListener('hashchange', handleRouteChange);
   window.addEventListener('resize', () => {
@@ -1692,14 +1937,36 @@ function bindEvents() {
     }
   });
 
-  document.getElementById('btn-play-story')?.addEventListener('click', () => {
-    state.motionPlaying = true;
-    const motionBtn = document.getElementById('btn-toggle-motion');
-    if (motionBtn) {
-      motionBtn.classList.add('active');
-      motionBtn.textContent = '🌺 Flor Viva: ACTIVA';
+  window.matchMedia?.('(prefers-reduced-motion: reduce)').addEventListener?.('change', e => {
+    reducedMotion = e.matches;
+    initPollenParticles(reducedMotion ? 8 : 28);
+  });
+
+  // Menú Exportar / Compartir
+  document.getElementById('btn-export-menu')?.addEventListener('click', e => {
+    e.stopPropagation();
+    setExportMenuOpen(document.getElementById('export-menu')?.hidden ?? false);
+  });
+  document.getElementById('export-menu')?.addEventListener('click', e => {
+    if (e.target.closest('.menu-item')) setExportMenuOpen(false);
+  });
+  document.addEventListener('click', e => {
+    if (!e.target.closest('#export-menu-wrap')) setExportMenuOpen(false);
+  });
+  document.getElementById('export-menu-wrap')?.addEventListener('keydown', e => {
+    const items = Array.from(document.querySelectorAll('#export-menu .menu-item'));
+    const idx = items.indexOf(document.activeElement);
+    if (e.key === 'Escape') {
+      setExportMenuOpen(false);
+      document.getElementById('btn-export-menu')?.focus();
+    } else if (e.key === 'ArrowDown' && items.length) {
+      e.preventDefault();
+      if (document.getElementById('export-menu').hidden) setExportMenuOpen(true);
+      else items[(idx + 1) % items.length].focus();
+    } else if (e.key === 'ArrowUp' && items.length) {
+      e.preventDefault();
+      items[(idx - 1 + items.length) % items.length].focus();
     }
-    selectStoryAct(1, true);
   });
 
   document.querySelectorAll('[data-story-act]').forEach(btn => {
@@ -1707,6 +1974,21 @@ function bindEvents() {
       const actNum = Number(btn.getAttribute('data-story-act'));
       selectStoryAct(actNum, false);
     });
+  });
+
+  document.getElementById('btn-story-prev')?.addEventListener('click', () => stepStory(-1));
+  document.getElementById('btn-story-next')?.addEventListener('click', () => stepStory(1));
+  document.getElementById('btn-story-autoplay')?.addEventListener('click', () => {
+    if (!state.motionPlaying) setMotionPlaying(true);
+    selectStoryAct(state.storyAct, !state.storyAutoCycle);
+  });
+
+  // Atajos de teclado: ← → para cambiar de paso (fuera de campos de formulario)
+  document.addEventListener('keydown', e => {
+    if (e.target.closest('input, select, textarea, [role="menu"]')) return;
+    if (state.choreography !== 'story') return;
+    if (e.key === 'ArrowRight') stepStory(1);
+    else if (e.key === 'ArrowLeft') stepStory(-1);
   });
 
   document.querySelectorAll('[data-choreo]').forEach(btn => {
@@ -1719,10 +2001,8 @@ function bindEvents() {
     triggerRadialShockwave();
   });
 
-  document.getElementById('btn-toggle-motion')?.addEventListener('click', e => {
-    state.motionPlaying = !state.motionPlaying;
-    e.currentTarget.classList.toggle('active', state.motionPlaying);
-    e.currentTarget.textContent = state.motionPlaying ? '🌺 Flor Viva: ACTIVA' : '⏸️ Flor Viva: PAUSADA';
+  document.getElementById('btn-toggle-motion')?.addEventListener('click', () => {
+    setMotionPlaying(!state.motionPlaying);
     if (state.motionPlaying) {
       if (state.renderTarget !== 'canvas') toggleSelectableMode(false);
       startAnimationLoop();
@@ -1731,18 +2011,26 @@ function bindEvents() {
     }
   });
 
-  document.getElementById('btn-toggle-curtain')?.addEventListener('click', e => {
-    state.curtainEnabled = !state.curtainEnabled;
-    e.currentTarget.classList.toggle('active', state.curtainEnabled);
-    if (state.curtainEnabled) {
-      showToast('🌗 Cortina activa: arrastra sobre la flor para comparar Foto Real vs Arte ASCII');
-    }
-    drawAsciiGridToCanvas();
+  document.getElementById('btn-toggle-code-focus')?.addEventListener('click', () => {
+    setCodeFocus(!state.codeFocus);
   });
+
+  document.querySelectorAll('.mobile-tab[data-mobile-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.getAttribute('data-mobile-tab');
+      setMobileTab(state.mobileTab === tab ? 'escena' : tab);
+    });
+  });
+  document.querySelectorAll('[data-close-sheet]').forEach(btn => {
+    btn.addEventListener('click', () => setMobileTab('escena'));
+  });
+
+  document.getElementById('btn-coach-dismiss')?.addEventListener('click', dismissCoachMark);
 
   document.getElementById('btn-toggle-framing')?.addEventListener('click', e => {
     state.verticalFraming = !state.verticalFraming;
     e.currentTarget.classList.toggle('active', state.verticalFraming);
+    e.currentTarget.setAttribute('aria-pressed', String(state.verticalFraming));
     document.getElementById('studio-workspace')?.classList.toggle('vertical-framing', state.verticalFraming);
     drawAsciiGridToCanvas();
   });
@@ -1871,33 +2159,46 @@ function bindEvents() {
     flashCodeStages(['compose']);
   });
 
-  // Canvas pointer inspection + interactive wind + curtain drag + shockwave click
+  // Canvas pointer: lupa + viento al pasar, arrastrar asa ↔ (solo modo Cortina), tocar/clic = onda vectorial
   const canvas = document.getElementById('ascii-canvas');
   if (canvas) {
     let lastNormX = null;
+    let downInfo = null; // { x, y, onHandle, moved }
 
-    const inspectPointer = (pt, isDown = false) => {
-      if (!state.gridData) return;
+    const toLogical = pt => {
       const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.offsetWidth / rect.width;
+      const logicalW = parseFloat(canvas.style.width) || rect.width;
+      const scale = logicalW / Math.max(1, rect.width);
+      return { lx: (pt.x - rect.left) * scale, ly: (pt.y - rect.top) * scale };
+    };
+
+    const isNearCurtainLine = pt => {
+      const splitX = Number(canvas.dataset.splitX || -1);
+      if (splitX < 0) return false;
+      const { lx } = toLogical(pt);
+      return Math.abs(lx - splitX) <= CURTAIN_GRAB_TOLERANCE_PX;
+    };
+
+    const inspectPointer = (pt, isTouch) => {
+      if (!state.gridData) return;
+      state.lastPointer = { clientX: pt.x, clientY: pt.y, isTouch };
       const charW = Number(canvas.dataset.charW || 8.6);
       const charH = Number(canvas.dataset.charH || 16.5);
       const padX = Number(canvas.dataset.padX || 10);
       const padY = Number(canvas.dataset.padY || 10);
 
-      const relX = (pt.x - rect.left) * scaleX - padX;
-      const relY = (pt.y - rect.top) * scaleX - padY;
+      const { lx, ly } = toLogical(pt);
+      const relX = lx - padX;
+      const relY = ly - padY;
       const innerW = state.gridData.cols * charW;
       const innerH = state.gridData.rows * charH;
 
       const normX = Math.max(0, Math.min(1, relX / Math.max(1, innerW)));
       const normY = Math.max(0, Math.min(1, relY / Math.max(1, innerH)));
 
-      if (state.isDraggingCurtain || (isDown && (state.curtainEnabled || state.choreography === 'curtain'))) {
+      if (state.isDraggingCurtain) {
         state.curtainPos = Math.max(0.05, Math.min(0.95, normX));
-      }
-
-      if (lastNormX !== null) {
+      } else if (!reducedMotion && lastNormX !== null) {
         const deltaX = normX - lastNormX;
         if (Math.abs(deltaX) > 0.002) {
           state.pointerWind.active = true;
@@ -1919,49 +2220,66 @@ function bindEvents() {
       }
     };
 
-    canvas.addEventListener('mousedown', e => {
-      if (state.curtainEnabled || state.choreography === 'curtain') {
+    canvas.addEventListener('pointerdown', e => {
+      dismissCoachMark();
+      const pt = { x: e.clientX, y: e.clientY };
+      const onHandle = isNearCurtainLine(pt);
+      downInfo = { x: e.clientX, y: e.clientY, onHandle, moved: false };
+      if (onHandle) {
         state.isDraggingCurtain = true;
+        state.curtainEnabled = true; // fija la posición manual
+        canvas.setPointerCapture?.(e.pointerId);
+        if (!state.curtainHintSeen) {
+          state.curtainHintSeen = true;
+          safeStorageSet(CURTAIN_HINT_STORAGE_KEY, '1');
+        }
       }
-      inspectPointer({ x: e.clientX, y: e.clientY }, true);
-      if (state.hoveredCell) {
+      inspectPointer(pt, e.pointerType !== 'mouse');
+    });
+
+    canvas.addEventListener('pointermove', e => {
+      const pt = { x: e.clientX, y: e.clientY };
+      if (downInfo && Math.hypot(e.clientX - downInfo.x, e.clientY - downInfo.y) > 6) {
+        downInfo.moved = true;
+      }
+      if (!state.isDraggingCurtain) {
+        canvas.classList.toggle('over-handle', isNearCurtainLine(pt));
+      }
+      inspectPointer(pt, e.pointerType !== 'mouse');
+    });
+
+    let touchLensTimer = null;
+    const endPointer = e => {
+      const wasTap = downInfo && !downInfo.onHandle && !downInfo.moved && e.type === 'pointerup';
+      state.isDraggingCurtain = false;
+      downInfo = null;
+      if (wasTap && state.hoveredCell) {
         triggerRadialShockwave(state.hoveredCell.col, state.hoveredCell.row);
       }
-    });
-
-    window.addEventListener('mouseup', () => {
-      state.isDraggingCurtain = false;
-    });
-
-    canvas.addEventListener('mousemove', e => inspectPointer({ x: e.clientX, y: e.clientY }));
-    canvas.addEventListener('mouseleave', () => {
-      state.hoveredCell = null;
-      lastNormX = null;
-      updateHoverHud(null);
+      if (e.pointerType !== 'mouse') {
+        clearTimeout(touchLensTimer);
+        touchLensTimer = setTimeout(() => {
+          state.hoveredCell = null;
+          lastNormX = null;
+          updateHoverHud(null);
+          if (!state.motionPlaying) drawAsciiGridToCanvas();
+        }, 2500);
+      }
       if (!state.motionPlaying) drawAsciiGridToCanvas();
+    };
+    canvas.addEventListener('pointerup', endPointer);
+    canvas.addEventListener('pointercancel', endPointer);
+
+    canvas.addEventListener('pointerleave', e => {
+      if (state.isDraggingCurtain) return;
+      if (e.pointerType === 'mouse') {
+        state.hoveredCell = null;
+        lastNormX = null;
+        canvas.classList.remove('over-handle');
+        updateHoverHud(null);
+        if (!state.motionPlaying) drawAsciiGridToCanvas();
+      }
     });
-
-    canvas.addEventListener(
-      'touchstart',
-      e => {
-        const t = e.touches[0];
-        if (!t) return;
-        inspectPointer({ x: t.clientX, y: t.clientY }, true);
-        if (state.hoveredCell) {
-          triggerRadialShockwave(state.hoveredCell.col, state.hoveredCell.row);
-        }
-      },
-      { passive: true }
-    );
-
-    canvas.addEventListener(
-      'touchmove',
-      e => {
-        const t = e.touches[0];
-        if (t) inspectPointer({ x: t.clientX, y: t.clientY }, true);
-      },
-      { passive: true }
-    );
   }
 
   // Copy buttons
@@ -1990,13 +2308,16 @@ function bindEvents() {
 }
 
 function init() {
-  initPollenParticles(28);
+  initPollenParticles(reducedMotion ? 8 : 28);
+  state.curtainHintSeen = Boolean(safeStorageGet(CURTAIN_HINT_STORAGE_KEY));
   buildShellHTML();
   renderKernelMatrices();
-  renderLiveCodeDock(true);
+  setCodeFocus((window.innerHeight || 900) < 1000 || isCompactLayout());
+  syncChoreoButtons();
   bindEvents();
   loadPhotoPreset();
   handleRouteChange();
+  maybeShowCoachMark();
 }
 
 init();

@@ -54,17 +54,19 @@ python3 ave_del_paraiso_sobel.py --static --save-txt strelitzia.txt --save-ans s
 
 La aplicación web reproduce con paridad matemática exacta el pipeline de `cv2.Sobel` (kernels 3×3, 5×5 real de OpenCV y filtro Scharr) a 60 FPS:
 
-- **Panel Superior (Terminal ASCII Viva + Guía en 5 Pasos)**:
-  - **Historia Explicada en 5 Pasos (`🎬 Historia Explicada (5 Pasos)`)**: Guía visual pensada para que cualquier persona entienda al instante el algoritmo: **1. Foto Real HD** → **2. Escáner Horizontal $G_x$ (`|`)** → **3. Escáner Vertical $G_y$ (`-`)** → **4. Brújula de Ángulos (`| / - \`)** → **5. Floración Viva + Rayos X**.
-  - **Cortina Interactiva Rayos X (`🌗 Cortina Foto ↔ ASCII`)**: Desliza una cortina sobre los pétalos para comparar lado a lado la fotografía original HD, las flechas vectoriales $\nabla I$ (`→ ↗ ↑ ↖`) y el arte ASCII direccional.
-  - **Floración Cinética + Polen Bioluminiscente + Viento Interactivo**: Los sépalos naranjas y lenguas azules se abren dinámicamente, oscilan con el viento de tu cursor/dedo, emiten partículas de polen (`✦ * + ·`) y reaccionan al clic con **Ondas de Choque Vectoriales (`💥`)**.
-  - **Lupa Rayos X Magnificada (`🔬 Lupa Rayos X cv2.Sobel`)**: Muestra un zoom píxel a píxel de la foto real junto con la flecha de gradiente y el carácter ASCII elegido.
-  - **Exportación Vertical 9:16 (`🎥 Exportar WebM` / `🎞️ Exportar GIF`)**: Graba la historia completa en 5 pasos con cortina Foto↔ASCII, floración viva y código Python abajo en formato 9:16.
-- **Panel Inferior (`ave_del_paraiso_sobel.py` en Vivo + Traductor en Español Sencillo)**:
-  - **Traductor Línea por Línea (`💡`)**: Explica en lenguaje cotidiano y sin tecnicismos qué hace cada línea de código de Python y cómo afecta a la flor.
-  - **Python Real en el Navegador (`🐍 Ejecutar Python Real (Pyodide)`)**: Carga bajo demanda `opencv-python` y `numpy` en WebAssembly mediante Pyodide y ejecuta el módulo [`ave_del_paraiso_sobel.py`](ave_del_paraiso_sobel.py) directamente en el navegador.
-  - Cada deslizador (`WIDTH`, `EDGE_THRESH`, `ksize`, saturación, contraste, rampa ASCII) actualiza en tiempo real los valores literales dentro del código Python inferior y el comando CLI.
-- **Panel Remote VM Lab (`🖥️ VM Lab` en `#/vm-lab`)**: Conserva el dashboard móvil original del repositorio en la ruta `#/vm-lab`.
+- **Cabecera Compacta + Menú `📤 Exportar`**:
+  - Controles directos (`🌺 Flor Viva`, `📱 9:16`) y un menú desplegable **`📤 Exportar`** que agrupa la grabación de video vertical 9:16 (`🎥 WebM` / `🎞️ GIF`), copiado de arte ASCII plano, ANSI 24-bit, script Python personalizado y descarga directa de `ave_del_paraiso_sobel.py`.
+- **Barra Única de Escena + Guía en 5 Pasos con Transporte (`⏮ ⏸ ⏭`)**:
+  - **Modos de Animación Unificados**: Selector segmentado (`🎬 Historia` | `🌺 Floración` | `🌗 Cortina` | `⚡ Pulso`) junto a las píldoras de los 5 pasos (**1. Foto Real** → **2. Escáner $G_x$ (`|`)** → **3. Escáner $G_y$ (`-`)** → **4. Brújula (`/ | \ -`)** → **5. Floración Viva**) con controles para pausar o avanzar/retroceder pasos manualmente (o con las flechas `←` / `→`) y leyenda compacta de una sola línea.
+  - **Gestos Separados (Cortina `↔` vs. Onda Vectorial `💥`)**: Arrastrar el asa central `↔` (con pulso de bienvenida y cursor `ew-resize`) desliza la cortina Foto HD ↔ Arte ASCII sin disparar ondas accidentales; hacer clic o tocar cualquier pétalo lanza una **Onda de Choque Vectorial (`💥`)**.
+  - **Lupa Rayos X Dinámica (`🔬 Lupa Rayos X cv2.Sobel`)**: Sigue suavemente al cursor cambiando de lado cerca de los bordes para no tapar nunca la flor, y en pantallas táctiles/móviles se acopla en la franja inferior.
+- **Panel Inferior Plegable (`ave_del_paraiso_sobel.py` en Vivo + Modo Foco 3 Líneas)**:
+  - **Vista Compacta sin Scroll**: En pantallas de laptop se activa por defecto el modo foco (mostrando las 3 líneas alrededor de la línea activa) con botón `▾ Ver 12 líneas` / `▴ Solo línea activa` para que la flor y el código se vean siempre al mismo tiempo.
+  - **Traductor Línea por Línea (`💡`)** y **Python Real en el Navegador (`🐍 Ejecutar Python Real`)** mediante Pyodide (`opencv-python` + `numpy` en WebAssembly).
+- **Cajón Inferior con Pestañas en Móvil (`🌺 Escena` | `🎛️ Ajustes` | `🐍 Código`)**:
+  - En móvil y tablet los ajustes de `cv2.Sobel` y el código se abren como un panel inferior deslizable de media altura para ajustar parámetros mientras la flor ASCII sigue visible arriba.
+- **Accesibilidad y Primera Visita**: Guía rápida de 3 gestos en la primera visita y soporte completo para `prefers-reduced-motion`.
+- **Panel Remote VM Lab (`#/vm-lab`)**: Conserva el dashboard móvil original del repositorio en la ruta `#/vm-lab`.
 
 ### Ejecutar y probar en local
 
