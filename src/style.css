@@ -1433,7 +1433,9 @@ input[type='range']::-webkit-slider-thumb:hover {
 
 /* Curtain Handle Cursor Affordance & First-Visit Coach Mark */
 .ascii-canvas {
-  touch-action: manipulation;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .ascii-canvas.over-handle {
@@ -1496,12 +1498,66 @@ input[type='range']::-webkit-slider-thumb:hover {
   backdrop-filter: blur(8px);
 }
 
+/* Cuando se acopla en móvil/táctil, se coloca DEBAJO del lienzo en una franja compacta de ~56px */
 .xray-lens-card.is-docked {
-  left: 10px;
-  right: 10px;
-  bottom: 10px;
-  top: auto;
-  width: auto;
+  position: static;
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px 10px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 2px 10px;
+  box-shadow: none;
+}
+
+.xray-lens-card.is-docked[hidden] {
+  display: none;
+}
+
+.xray-lens-card.is-docked .xray-lens-header {
+  grid-column: 2;
+  grid-row: 1;
+  margin-bottom: 0;
+  justify-content: flex-start;
+  gap: 8px;
+  font-size: 0.67rem;
+}
+
+.xray-lens-card.is-docked .xray-lens-body {
+  grid-column: 1 / -1;
+  grid-row: 1 / 3;
+  display: contents;
+}
+
+.xray-lens-card.is-docked #xray-patch-canvas {
+  grid-column: 1;
+  grid-row: 1 / 3;
+  width: 48px;
+  height: 48px;
+}
+
+.xray-lens-card.is-docked .xray-lens-math {
+  grid-column: 2;
+  grid-row: 2;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 8px;
+}
+
+.xray-lens-card.is-docked .xray-big-arrow,
+.xray-lens-card.is-docked .xray-big-glyph {
+  font-size: 0.95rem;
+  padding: 0 5px;
+}
+
+.xray-lens-card.is-docked .xray-plain-explain {
+  flex-basis: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.69rem;
 }
 
 .xray-lens-header {
@@ -1604,7 +1660,19 @@ input[type='range']::-webkit-slider-thumb:hover {
 
 @media (max-width: 1080px) {
   .studio-shell {
-    padding-bottom: 78px;
+    padding: 8px 10px 72px;
+    gap: 8px;
+  }
+
+  .ascii-viewport-wrapper {
+    flex-direction: column;
+    min-height: 0;
+    padding: 6px;
+  }
+
+  /* La barra acoplada de Lupa Rayos X reemplaza al HUD largo en pantallas compactas */
+  .sobel-hud-bar {
+    display: none;
   }
 
   .story-step-pill:not(.active) .pill-text {
@@ -1620,7 +1688,7 @@ input[type='range']::-webkit-slider-thumb:hover {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 6px;
-    padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+    padding: 7px 10px calc(7px + env(safe-area-inset-bottom, 0px));
     background: rgba(8, 12, 22, 0.96);
     border-top: 1px solid var(--border-strong);
     backdrop-filter: blur(12px);
@@ -1663,6 +1731,28 @@ input[type='range']::-webkit-slider-thumb:hover {
     display: inline-flex;
   }
 
+  /* En modo Escena mostramos solo la línea explicativa 💡 debajo de la flor; tocarla abre el código */
+  .studio-workspace[data-mobile-tab='escena'] .code-dock-header,
+  .studio-workspace[data-mobile-tab='escena'] .code-lines-container,
+  .studio-workspace[data-mobile-tab='escena'] .cli-command-bar,
+  .studio-workspace[data-mobile-tab='ajustes'] .code-dock-header,
+  .studio-workspace[data-mobile-tab='ajustes'] .code-lines-container,
+  .studio-workspace[data-mobile-tab='ajustes'] .cli-command-bar {
+    display: none;
+  }
+
+  .code-plain-explainer {
+    cursor: pointer;
+    padding: 5px 10px;
+    font-size: 0.72rem;
+  }
+
+  .code-plain-explainer #code-plain-explainer-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   /* En modo Escena o Código ocultamos el sidebar; en Ajustes lo abrimos como cajón inferior fijo */
   .studio-workspace[data-mobile-tab='escena'] .controls-sidebar,
   .studio-workspace[data-mobile-tab='codigo'] .controls-sidebar {
@@ -1673,14 +1763,14 @@ input[type='range']::-webkit-slider-thumb:hover {
     position: fixed;
     left: 0;
     right: 0;
-    bottom: 54px;
-    max-height: 48dvh;
+    bottom: 49px;
+    max-height: 40dvh;
     overflow-y: auto;
     z-index: 55;
     background: rgba(10, 14, 24, 0.98);
     border-top: 1px solid var(--strelitzia-orange);
     border-radius: 16px 16px 0 0;
-    padding: 12px 14px 18px;
+    padding: 10px 12px 16px;
     box-shadow: 0 -16px 40px rgba(0, 0, 0, 0.78);
   }
 
@@ -1688,8 +1778,8 @@ input[type='range']::-webkit-slider-thumb:hover {
     position: fixed;
     left: 0;
     right: 0;
-    bottom: 54px;
-    max-height: 52dvh;
+    bottom: 49px;
+    max-height: 44dvh;
     overflow-y: auto;
     z-index: 55;
     border-top: 1px solid var(--strelitzia-blue);
@@ -1699,6 +1789,189 @@ input[type='range']::-webkit-slider-thumb:hover {
 
   .studio-workspace[data-mobile-tab='codigo'] .code-line.out-of-focus {
     display: grid;
+  }
+}
+
+@media (max-width: 720px) {
+  .studio-shell {
+    padding: 5px 5px 62px;
+    gap: 5px;
+  }
+
+  .studio-header {
+    padding: 6px 8px;
+    gap: 6px;
+    flex-wrap: nowrap;
+  }
+
+  .brand-group {
+    min-width: 0;
+    gap: 7px;
+  }
+
+  .brand-emblem {
+    width: 28px;
+    height: 28px;
+    font-size: 0.8rem;
+    border-radius: 7px;
+  }
+
+  .brand-titles {
+    min-width: 0;
+  }
+
+  .brand-titles h1 {
+    font-size: 0.8rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+  }
+
+  .species-tag,
+  .brand-subtitle {
+    display: none;
+  }
+
+  .header-actions {
+    width: auto;
+    flex-shrink: 0;
+    gap: 4px;
+  }
+
+  .header-actions .btn {
+    padding: 4px 8px;
+    font-size: 0.71rem;
+    gap: 4px;
+  }
+
+  .stage-control-bar {
+    padding: 5px 7px;
+    gap: 4px;
+  }
+
+  .choreo-segment {
+    order: 1;
+    flex: 1;
+    justify-content: space-between;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  #btn-trigger-shockwave {
+    order: 2;
+  }
+
+  .choreo-segment::-webkit-scrollbar {
+    display: none;
+  }
+
+  .seg-btn {
+    padding: 3px 6px;
+    font-size: 0.69rem;
+    gap: 3px;
+  }
+
+  .story-transport {
+    order: 3;
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: nowrap;
+    gap: 3px;
+  }
+
+  .stage-control-bar:not(.is-story) .story-transport {
+    display: none;
+  }
+
+  .story-steps-pills {
+    flex-wrap: nowrap;
+    gap: 3px;
+  }
+
+  .story-step-pill {
+    padding: 2px 6px;
+    font-size: 0.67rem;
+  }
+
+  .icon-btn {
+    padding: 3px 6px;
+    font-size: 0.72rem;
+  }
+
+  .story-caption {
+    padding: 4px 8px 6px;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .story-badge {
+    font-size: 0.61rem;
+    padding: 1px 5px;
+  }
+
+  .story-title {
+    font-size: 0.72rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .story-subtitle {
+    display: none;
+  }
+
+  .stage-topbar {
+    padding: 4px 7px;
+  }
+
+  .window-dots {
+    display: none;
+  }
+
+  .view-mode-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    width: 100%;
+    scrollbar-width: none;
+  }
+
+  .view-mode-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mode-tab {
+    white-space: nowrap;
+    padding: 3px 7px;
+    font-size: 0.68rem;
+  }
+
+  .reference-pip {
+    top: 6px;
+    right: 6px;
+    width: 54px;
+    padding: 3px;
+  }
+
+  .reference-pip-header {
+    font-size: 0.54rem;
+    margin-bottom: 2px;
+  }
+
+  .coach-mark {
+    top: 6px;
+    left: 6px;
+    bottom: auto;
+    max-width: 245px;
+    padding: 6px 9px;
+    font-size: 0.68rem;
+  }
+
+  .xray-lens-card.is-docked .xray-lens-header span {
+    display: none;
   }
 }
 

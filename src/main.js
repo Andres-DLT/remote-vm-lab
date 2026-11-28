@@ -933,12 +933,24 @@ function isCompactLayout() {
   return window.matchMedia?.('(max-width: 1080px)').matches;
 }
 
+function isMobileViewport() {
+  return window.matchMedia?.('(max-width: 720px)').matches;
+}
+
 // Altura disponible para el lienzo ASCII: en escritorio reservamos espacio para cabecera,
-// barra de escena, HUD y el código en modo foco; en móvil dejamos ~mitad de pantalla
-// libre para el panel inferior (Ajustes / Código).
+// barra de escena, HUD y el código en modo foco; en móvil adaptamos según si hay cajón abierto.
 function computeAvailableCanvasHeight() {
   const vh = window.innerHeight || 900;
   if (state.verticalFraming) return Math.max(420, vh - 120);
+  if (isMobileViewport()) {
+    const wrapper = document.getElementById('ascii-viewport-wrapper');
+    const topY = wrapper ? wrapper.getBoundingClientRect().top : 180;
+    const effectiveTop = topY > 40 && topY < vh * 0.55 ? topY : 180;
+    if (state.mobileTab !== 'escena') {
+      return Math.max(125, vh * 0.52 - effectiveTop - 16);
+    }
+    return Math.max(190, vh - effectiveTop - 165);
+  }
   if (isCompactLayout()) return Math.max(240, vh * 0.5);
   return Math.max(320, vh - 400);
 }
@@ -950,19 +962,24 @@ function drawAsciiGridToCanvas() {
   const canvas = document.getElementById('ascii-canvas');
   if (!canvas) return;
 
+  const mobile = isMobileViewport();
+  const padX = mobile ? 6 : 10;
+  const padY = mobile ? 6 : 10;
+
   const wrapper = document.getElementById('ascii-viewport-wrapper');
-  const availW = wrapper && wrapper.clientWidth > 120 ? wrapper.clientWidth - 28 : 960;
+  const availW = wrapper && wrapper.clientWidth > 120 ? wrapper.clientWidth - (mobile ? 12 : 28) : 960;
 
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const defaultCharW = cols > 110 ? 7.2 : cols > 85 ? 8.6 : 10.2;
-  const maxFitCharW = Math.max(3.8, (availW - 20) / cols);
+  const minCharFloor = mobile && state.mobileTab !== 'escena' ? 1.5 : 2.6;
+  const maxFitCharW = Math.max(minCharFloor, (availW - padX * 2) / cols);
   const availH = computeAvailableCanvasHeight();
-  const maxFitByHeight = Math.max(3.6, (availH - 20) / rows / 1.92);
+  const maxFitByHeight = Math.max(minCharFloor, (availH - padY * 2) / rows / 1.92);
   const baseCharW = Math.min(defaultCharW, maxFitCharW, maxFitByHeight);
   const baseCharH = baseCharW * 1.92;
 
-  const logicalW = Math.ceil(cols * baseCharW + 20);
-  const logicalH = Math.ceil(rows * baseCharH + 20);
+  const logicalW = Math.ceil(cols * baseCharW + padX * 2);
+  const logicalH = Math.ceil(rows * baseCharH + padY * 2);
 
   const targetW = Math.round(logicalW * dpr);
   const targetH = Math.round(logicalH * dpr);
@@ -979,8 +996,6 @@ function drawAsciiGridToCanvas() {
   ctx.fillStyle = '#04060a';
   ctx.fillRect(0, 0, logicalW, logicalH);
 
-  const padX = 10;
-  const padY = 10;
   const innerW = cols * baseCharW;
   const innerH = rows * baseCharH;
 
@@ -1236,11 +1251,50 @@ function drawAsciiGridToCanvas() {
   canvas.dataset.padY = String(padY);
 }
 
+function resolveInspectedCell(col, row, isTouch = false) {
+  if (!state.gridData) return null;
+  const { grid, cols, rows } = state.gridData;
+  const c0 = Math.max(0, Math.min(cols - 1, col));
+  const r0 = Math.max(0, Math.min(rows - 1, row));
+  const direct = grid[r0][c0];
+  if (direct.char !== ' ' || direct.edgeChar !== ' ') {
+    return { col: c0, row: r0, cell: direct };
+  }
+
+  // En pantallas táctiles (dedo más ancho que un carácter), buscamos el pétalo más cercano en un radio de 3 celdas
+  const maxRadius = isTouch ? 3 : 1;
+  let best = null;
+  let bestDist = Infinity;
+  for (let dy = -maxRadius; dy <= maxRadius; dy++) {
+    const rr = r0 + dy;
+    if (rr < 0 || rr >= rows) continue;
+    for (let dx = -maxRadius; dx <= maxRadius; dx++) {
+      const cc = c0 + dx;
+      if (cc < 0 || cc >= cols) continue;
+      const cand = grid[rr][cc];
+      if (cand.char !== ' ' || cand.edgeChar !== ' ') {
+        const d = dx * dx + dy * dy - (cand.isEdge ? 0.35 : 0);
+        if (d < bestDist) {
+          bestDist = d;
+          best = { col: cc, row: rr, cell: cand };
+        }
+      }
+    }
+  }
+  return best || { col: c0, row: r0, cell: direct };
+}
+
+function getDefaultSampleCell() {
+  if (!state.gridData) return null;
+  const { cols, rows } = state.gridData;
+  return resolveInspectedCell(Math.round(cols * 0.46), Math.round(rows * 0.44), true);
+}
+
 function positionXRayLens(card) {
   const wrapper = document.getElementById('ascii-viewport-wrapper');
   const p = state.lastPointer;
-  const shouldDock = !p || p.isTouch || window.matchMedia?.('(max-width: 720px)').matches;
-  card.classList.toggle('is-docked', Boolean(shouldDock));
+  const shouldDock = Boolean(!p || p.isTouch || isCompactLayout());
+  card.classList.toggle('is-docked', shouldDock);
   if (shouldDock || !wrapper) {
     card.style.left = '';
     card.style.top = '';
@@ -1270,34 +1324,45 @@ function updateXRayMagnifierLens(cellInfo) {
   const card = document.getElementById('xray-lens-card');
   if (!card) return;
 
-  if (!cellInfo || cellInfo.cell.char === ' ') {
+  const compact = isCompactLayout() || Boolean(state.lastPointer?.isTouch);
+  const targetInfo = cellInfo || (compact ? getDefaultSampleCell() : null);
+
+  if (!targetInfo) {
     card.hidden = true;
     return;
   }
 
   card.hidden = false;
   positionXRayLens(card);
-  const { col, row, cell } = cellInfo;
+  const { col, row, cell } = targetInfo;
+  const isPromptState = !cellInfo && compact;
   const coordEl = document.getElementById('xray-coord-label');
   const arrowEl = document.getElementById('xray-arrow-char');
   const edgeEl = document.getElementById('xray-edge-char');
   const angleEl = document.getElementById('xray-angle-text');
   const explainEl = document.getElementById('xray-plain-explain');
 
-  if (coordEl) coordEl.textContent = `celda (${col}, ${row})`;
+  const displayChar = cell.char !== ' ' ? cell.char : cell.edgeChar !== ' ' ? cell.edgeChar : '·';
+  const displayColor = cell.char !== ' ' || cell.edgeChar !== ' ' ? `rgb(${cell.r}, ${cell.g}, ${cell.b})` : '#94a3b8';
+
+  if (coordEl) {
+    coordEl.textContent = isPromptState ? '👆 Desliza sobre la flor' : `celda (${col}, ${row})`;
+  }
   if (arrowEl) {
     arrowEl.textContent = cell.arrowChar !== ' ' ? cell.arrowChar : '•';
-    arrowEl.style.color = `rgb(${cell.r}, ${cell.g}, ${cell.b})`;
+    arrowEl.style.color = displayColor;
   }
   if (edgeEl) {
-    edgeEl.textContent = cell.char;
-    edgeEl.style.color = `rgb(${cell.r}, ${cell.g}, ${cell.b})`;
+    edgeEl.textContent = displayChar;
+    edgeEl.style.color = displayColor;
   }
   if (angleEl) {
     angleEl.textContent = `Gx:${cell.gx}  Gy:${cell.gy}  θ:${cell.angle}°`;
   }
   if (explainEl) {
-    if (cell.isEdge) {
+    if (isPromptState) {
+      explainEl.textContent = 'Toca o arrastra el dedo por los pétalos para inspeccionar y crear viento';
+    } else if (cell.isEdge) {
       const dirDesc =
         cell.edgeChar === '|'
           ? 'Borde vertical'
@@ -1305,8 +1370,10 @@ function updateXRayMagnifierLens(cellInfo) {
           ? 'Borde horizontal'
           : 'Borde diagonal';
       explainEl.textContent = `${dirDesc} (|G|=${cell.mag}) → traza '${cell.edgeChar}'`;
-    } else {
+    } else if (cell.char !== ' ') {
       explainEl.textContent = `Interior de pétalo (luz=${cell.lum}) → sombrea '${cell.char}'`;
+    } else {
+      explainEl.textContent = `Fondo oscuro (|G|=${cell.mag}) → toca un pétalo`;
     }
   }
 
@@ -1375,20 +1442,21 @@ function updateHoverHud(cellInfo) {
   updateXRayMagnifierLens(cellInfo);
   if (!hud) return;
 
-  if (!cellInfo || cellInfo.cell.char === ' ') {
+  if (!cellInfo) {
     hud.innerHTML = `
-      <span class="hud-pill">✨ <strong>Interactivo:</strong> Mueve el cursor para crear viento y ver la Lupa Rayos X • Haz clic en la flor para lanzar una <strong>Onda Vectorial</strong></span>
+      <span class="hud-pill">✨ <strong>Interactivo:</strong> Mueve el cursor o desliza el dedo para crear viento y ver la Lupa Rayos X • Toca la flor para lanzar una <strong>Onda Vectorial</strong></span>
     `;
     return;
   }
 
   const { col, row, cell } = cellInfo;
+  const displayChar = cell.char !== ' ' ? cell.char : cell.edgeChar !== ' ' ? cell.edgeChar : '·';
   const rgbHex = `#${[cell.r, cell.g, cell.b].map(v => v.toString(16).padStart(2, '0')).join('')}`;
-  const kindLabel = cell.isEdge ? 'Borde cv2.Sobel' : 'Relleno Luminancia';
+  const kindLabel = cell.isEdge ? 'Borde cv2.Sobel' : cell.char !== ' ' ? 'Relleno Luminancia' : 'Fondo';
 
   hud.innerHTML = `
     <span class="hud-pill">Celda: <strong>(${col}, ${row})</strong></span>
-    <span class="hud-pill">Vector: <strong>${cell.arrowChar || '•'}</strong> → <span class="hud-glyph-badge">${cell.char}</span> <span>${kindLabel}</span></span>
+    <span class="hud-pill">Vector: <strong>${cell.arrowChar || '•'}</strong> → <span class="hud-glyph-badge">${displayChar}</span> <span>${kindLabel}</span></span>
     <span class="hud-pill">Gx: <strong>${cell.gx}</strong></span>
     <span class="hud-pill">Gy: <strong>${cell.gy}</strong></span>
     <span class="hud-pill">|G|: <strong>${cell.mag}</strong>/255</span>
@@ -1441,6 +1509,12 @@ function recomputeAndRender(breezePhaseOverride = null, bloomFactorOverride = 1.
   state.gridData = computeFrameForPhase(breezePhaseOverride, bloomFactorOverride);
 
   updateStatsAndHud();
+  if (state.hoveredCell && state.gridData) {
+    const resolved = resolveInspectedCell(state.hoveredCell.col, state.hoveredCell.row, Boolean(state.lastPointer?.isTouch));
+    if (resolved) updateXRayMagnifierLens(resolved);
+  } else if (isCompactLayout()) {
+    updateXRayMagnifierLens(null);
+  }
   if (state.renderTarget === 'canvas') {
     drawAsciiGridToCanvas();
   } else {
@@ -1908,9 +1982,10 @@ function setMobileTab(tab) {
     btn.classList.toggle('active', isActive);
     btn.setAttribute('aria-pressed', String(isActive));
   });
+  drawAsciiGridToCanvas();
   if (tab !== 'escena' && isCompactLayout()) {
     // Lleva la flor arriba para que se vea mientras se ajusta en el panel inferior
-    document.getElementById('ascii-viewport-wrapper')?.scrollIntoView({ block: 'start', behavior: reducedMotion ? 'auto' : 'smooth' });
+    document.getElementById('sobel-split-stage')?.scrollIntoView({ block: 'start', behavior: reducedMotion ? 'auto' : 'smooth' });
   }
 }
 
@@ -1926,7 +2001,7 @@ function maybeShowCoachMark() {
   const coach = document.getElementById('coach-mark');
   if (!coach) return;
   coach.hidden = false;
-  setTimeout(dismissCoachMark, 6500);
+  setTimeout(dismissCoachMark, 5000);
 }
 
 function bindEvents() {
@@ -2159,7 +2234,14 @@ function bindEvents() {
     flashCodeStages(['compose']);
   });
 
-  // Canvas pointer: lupa + viento al pasar, arrastrar asa ↔ (solo modo Cortina), tocar/clic = onda vectorial
+  // En móvil, tocar la barra de explicación de código abre el cajón de código completo
+  document.getElementById('code-plain-explainer')?.addEventListener('click', () => {
+    if (isCompactLayout()) {
+      setMobileTab(state.mobileTab === 'codigo' ? 'escena' : 'codigo');
+    }
+  });
+
+  // Canvas pointer: lupa + viento al pasar/deslizar, arrastrar asa ↔ (o deslizar en modo Cortina), tocar/clic = onda vectorial
   const canvas = document.getElementById('ascii-canvas');
   if (canvas) {
     let lastNormX = null;
@@ -2172,11 +2254,12 @@ function bindEvents() {
       return { lx: (pt.x - rect.left) * scale, ly: (pt.y - rect.top) * scale };
     };
 
-    const isNearCurtainLine = pt => {
+    const isNearCurtainLine = (pt, isTouch = false) => {
       const splitX = Number(canvas.dataset.splitX || -1);
       if (splitX < 0) return false;
       const { lx } = toLogical(pt);
-      return Math.abs(lx - splitX) <= CURTAIN_GRAB_TOLERANCE_PX;
+      const tol = isTouch ? 44 : CURTAIN_GRAB_TOLERANCE_PX;
+      return Math.abs(lx - splitX) <= tol;
     };
 
     const inspectPointer = (pt, isTouch) => {
@@ -2209,66 +2292,120 @@ function bindEvents() {
       }
       lastNormX = normX;
 
-      const col = Math.floor(relX / charW);
-      const row = Math.floor(relY / charH);
+      const rawCol = Math.floor(relX / charW);
+      const rawRow = Math.floor(relY / charH);
+      const inBounds =
+        rawCol >= 0 && rawCol < state.gridData.cols && rawRow >= 0 && rawRow < state.gridData.rows;
 
-      if (col >= 0 && col < state.gridData.cols && row >= 0 && row < state.gridData.rows) {
-        const cell = state.gridData.grid[row][col];
-        state.hoveredCell = { col, row };
-        updateHoverHud({ col, row, cell });
-        if (!state.motionPlaying) drawAsciiGridToCanvas();
+      if (inBounds || isTouch || downInfo) {
+        const clampedCol = Math.max(0, Math.min(state.gridData.cols - 1, rawCol));
+        const clampedRow = Math.max(0, Math.min(state.gridData.rows - 1, rawRow));
+        const resolved = resolveInspectedCell(clampedCol, clampedRow, isTouch);
+        if (resolved) {
+          state.hoveredCell = { col: resolved.col, row: resolved.row };
+          updateHoverHud(resolved);
+          if (!state.motionPlaying) drawAsciiGridToCanvas();
+        }
       }
     };
 
-    canvas.addEventListener('pointerdown', e => {
+    let touchLensTimer = null;
+
+    const handleGestureStart = (pt, isTouch, pointerId = null) => {
       dismissCoachMark();
-      const pt = { x: e.clientX, y: e.clientY };
-      const onHandle = isNearCurtainLine(pt);
-      downInfo = { x: e.clientX, y: e.clientY, onHandle, moved: false };
+      const onHandle = isNearCurtainLine(pt, isTouch);
+      downInfo = { x: pt.x, y: pt.y, onHandle, moved: false };
+      if (pointerId !== null) {
+        try {
+          canvas.setPointerCapture?.(pointerId);
+        } catch {
+          /* ignorar si el puntero es sintético o no está activo */
+        }
+      }
       if (onHandle) {
         state.isDraggingCurtain = true;
         state.curtainEnabled = true; // fija la posición manual
-        canvas.setPointerCapture?.(e.pointerId);
         if (!state.curtainHintSeen) {
           state.curtainHintSeen = true;
           safeStorageSet(CURTAIN_HINT_STORAGE_KEY, '1');
         }
       }
-      inspectPointer(pt, e.pointerType !== 'mouse');
-    });
+      inspectPointer(pt, isTouch);
+    };
 
-    canvas.addEventListener('pointermove', e => {
-      const pt = { x: e.clientX, y: e.clientY };
-      if (downInfo && Math.hypot(e.clientX - downInfo.x, e.clientY - downInfo.y) > 6) {
-        downInfo.moved = true;
+    const handleGestureMove = (pt, isTouch) => {
+      if (downInfo) {
+        const dx = pt.x - downInfo.x;
+        const dy = pt.y - downInfo.y;
+        if (Math.hypot(dx, dy) > 8) {
+          downInfo.moved = true;
+          // En modo Cortina, cualquier arrastre horizontal mueve la cortina sin exigir atinarle a la línea
+          if (!state.isDraggingCurtain && state.choreography === 'curtain' && Math.abs(dx) >= Math.abs(dy)) {
+            state.isDraggingCurtain = true;
+            state.curtainEnabled = true;
+            downInfo.onHandle = true;
+          }
+        }
       }
-      if (!state.isDraggingCurtain) {
-        canvas.classList.toggle('over-handle', isNearCurtainLine(pt));
+      if (!state.isDraggingCurtain && !isTouch) {
+        canvas.classList.toggle('over-handle', isNearCurtainLine(pt, false));
       }
-      inspectPointer(pt, e.pointerType !== 'mouse');
-    });
+      if (isTouch && !downInfo) return;
+      inspectPointer(pt, isTouch);
+    };
 
-    let touchLensTimer = null;
-    const endPointer = e => {
-      const wasTap = downInfo && !downInfo.onHandle && !downInfo.moved && e.type === 'pointerup';
+    const handleGestureEnd = (isTouch, isCancel = false) => {
+      if (!downInfo && !state.isDraggingCurtain) return;
+      const wasTap = downInfo && !downInfo.onHandle && !downInfo.moved && !isCancel;
       state.isDraggingCurtain = false;
       downInfo = null;
       if (wasTap && state.hoveredCell) {
         triggerRadialShockwave(state.hoveredCell.col, state.hoveredCell.row);
       }
-      if (e.pointerType !== 'mouse') {
+      if (isTouch) {
         clearTimeout(touchLensTimer);
         touchLensTimer = setTimeout(() => {
-          state.hoveredCell = null;
           lastNormX = null;
-          updateHoverHud(null);
           if (!state.motionPlaying) drawAsciiGridToCanvas();
         }, 2500);
       }
       if (!state.motionPlaying) drawAsciiGridToCanvas();
     };
-    canvas.addEventListener('pointerup', endPointer);
-    canvas.addEventListener('pointercancel', endPointer);
+
+    // Soporte directo para Touch Events (iOS Safari, Android Chrome y WebViews de redes sociales)
+    canvas.addEventListener(
+      'touchstart',
+      e => {
+        if (e.touches.length === 1) {
+          e.preventDefault();
+          const t = e.touches[0];
+          handleGestureStart({ x: t.clientX, y: t.clientY }, true);
+        }
+      },
+      { passive: false }
+    );
+    canvas.addEventListener(
+      'touchmove',
+      e => {
+        if (e.touches.length === 1) {
+          e.preventDefault();
+          const t = e.touches[0];
+          handleGestureMove({ x: t.clientX, y: t.clientY }, true);
+        }
+      },
+      { passive: false }
+    );
+    canvas.addEventListener('touchend', () => handleGestureEnd(true, false));
+    canvas.addEventListener('touchcancel', () => handleGestureEnd(true, true));
+
+    canvas.addEventListener('pointerdown', e => {
+      handleGestureStart({ x: e.clientX, y: e.clientY }, e.pointerType !== 'mouse', e.pointerId);
+    });
+    canvas.addEventListener('pointermove', e => {
+      handleGestureMove({ x: e.clientX, y: e.clientY }, e.pointerType !== 'mouse');
+    });
+    canvas.addEventListener('pointerup', e => handleGestureEnd(e.pointerType !== 'mouse', false));
+    canvas.addEventListener('pointercancel', e => handleGestureEnd(e.pointerType !== 'mouse', true));
 
     canvas.addEventListener('pointerleave', e => {
       if (state.isDraggingCurtain) return;
